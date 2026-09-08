@@ -10,15 +10,15 @@ from datetime import datetime
 from tqdm import tqdm
 import time
 import pickle
+import os
 import argparse
 from sklearn.metrics import roc_auc_score, f1_score
 
 parser = argparse.ArgumentParser()
-
-dataset = parser.add_argument('--dataset', choices = ['hc3', 'gpt3.5'])
-seed = parser.add_argument('--seed', choices = ['2021', '2022', '2023', '2024', '2025'])
-test_file = parser.add_argument('--file', type = str)
-do_save = parser.add_argument('-s', '--save', action = 'store_true')
+parser.add_argument('--dataset', choices=['hc3', 'gpt3.5'], default='hc3')
+parser.add_argument('--seed', choices=['2021', '2022', '2023', '2024', '2025'], default='2024')
+parser.add_argument('--file', dest='test_file', type=str, default='hc3_test')
+parser.add_argument('-s', '--save', dest='do_save', action='store_true')
 
 args = parser.parse_args()
 
@@ -57,7 +57,7 @@ def test(test_file, dataset_name, seed):
     optimizer = optim.Adam(gcnmodel.parameters(), lr=0.0001)
     criterion = nn.BCELoss()
     
-    with open(f"/root/autodl-tmp/graph_data/{test_file}.pkl", "rb") as f:
+    with open(f"./graph_data/{test_file}.pkl", "rb") as f:
         hc3_test = pickle.load(f)
     test_len = len(hc3_test['y'])
     test_gcnmodel = GCN2(input_dim, hidden_dim, output_dim).to(device)
@@ -87,12 +87,12 @@ def test(test_file, dataset_name, seed):
     print(f"test_loss: {test_loss}, test_acc: {test_acc}, test_f1: {test_f1}")
     auc = roc_auc_score(hc3_test['y'], test_pres)
     if args.do_save:
-        with open(f"/root/autodl-tmp/result/test_result.txt", "a", encoding="utf-8") as w:
+        os.makedirs("./result", exist_ok=True)
+        with open(f"./result/test_result.txt", "a", encoding="utf-8") as w:
             w.write(f"{test_file}\t acc: {test_acc}\t auc: {auc}\t f1: {test_f1}\t seed: {seed}\t{datetime.now()}\n")
     return y_pred
 
 
-def main():
-    if __name__ == "__main__":
-        print(args.test_file, args.dataset, args.seed)
-        test(args.test_file, args.dataset, args.seed)
+if __name__ == "__main__":
+    print(f"Testing: file={args.test_file}, dataset={args.dataset}, seed={args.seed}")
+    test(args.test_file, args.dataset, args.seed)

@@ -11,10 +11,11 @@
 # 训练模型
 
 
+import os
 import pickle
-with open("/root/autodl-tmp/graph_data/hc3_train.pkl", "rb") as f:
+with open("./graph_data/hc3_train.pkl", "rb") as f:
     hc3_train = pickle.load(f)
-with open("/root/autodl-tmp/graph_data/hc3_val.pkl", "rb") as f:
+with open("./graph_data/hc3_val.pkl", "rb") as f:
     hc3_val = pickle.load(f)
 
 import torch
@@ -156,6 +157,7 @@ for epoch in range(epochs):
     if epoch_acc >= val_max_acc:
         val_max_acc = epoch_acc
         tag = 3
+        os.makedirs("./model", exist_ok=True)
         torch.save(gcnmodel.state_dict(), f'./model/{dataset_name}_gcn_model_{seed}.pth')
     else:
         tag -= 1
@@ -170,7 +172,7 @@ writer.close()
 
 import pickle
 test_file = "hc3_test"
-with open(f"/root/autodl-tmp/graph_data/{test_file}.pkl", "rb") as f:
+with open(f"./graph_data/{test_file}.pkl", "rb") as f:
     hc3_test = pickle.load(f)
 test_len = len(hc3_test['y'])
 

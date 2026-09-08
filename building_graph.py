@@ -1,3 +1,5 @@
+import os
+import time
 import spacy
 import torch
 import json
@@ -9,10 +11,14 @@ from scipy.sparse import csr_matrix
 
 # 加载英语模型
 nlp = spacy.load("en_core_web_sm")
-# model = RobertaModel.from_pretrained("roberta-base")
-# tokenizer = RobertaTokenizer.from_pretrained("roberta-base", do_lower_case=False)
-model = RobertaModel.from_pretrained("./roberta-base/")
-tokenizer = RobertaTokenizer("./roberta-base/vocab.json", "./roberta-base/merges.txt", use_fast=False)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+if os.path.exists("./roberta-base/vocab.json"):
+    model = RobertaModel.from_pretrained("./roberta-base/").to(device)
+    tokenizer = RobertaTokenizer("./roberta-base/vocab.json", "./roberta-base/merges.txt", use_fast=False)
+else:
+    model = RobertaModel.from_pretrained("roberta-base").to(device)
+    tokenizer = RobertaTokenizer.from_pretrained("roberta-base", do_lower_case=False)
 vocab_size = len(tokenizer)
 
 def build_graph(json_texts):
@@ -84,7 +90,8 @@ def read_json(file_name):
     return texts
 
 def save_pkl(file_name, all_token_embeddings, all_edge_index, y):
-    with open(f"/root/autodl-tmp/graph_data/{file_name}.pkl", "wb") as f:
+    os.makedirs("./graph_data", exist_ok=True)
+    with open(f"./graph_data/{file_name}.pkl", "wb") as f:
         pickle.dump({"all_token_embeddings": all_token_embeddings,
                      "all_edge_index": all_edge_index,
                      "y": y}, f)
