@@ -21,9 +21,9 @@ def detect(text, dataset, seed):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed) 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    input_dim = 768  # 输入维度
-    hidden_dim = 256  # 隐藏层维度
-    output_dim = 64  # 输出类别数
+    input_dim = 768  # Input dimension
+    hidden_dim = 256  # Hidden layer dimension
+    output_dim = 64  # Output dimension
     gcnmodel = GCN2(input_dim, hidden_dim, output_dim).to(device)
     gcnmodel.load_state_dict(torch.load(f'./model/{dataset}_gcn_model_{seed}.pth'))
     gcnmodel.eval()

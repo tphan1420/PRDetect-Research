@@ -9,7 +9,7 @@ from tqdm import tqdm
 from transformers import RobertaTokenizer, RobertaModel
 from scipy.sparse import csr_matrix
 
-# 加载英语模型
+# Load English model
 nlp = spacy.load("en_core_web_sm")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -60,7 +60,7 @@ def build_graph(json_texts):
             node_relations = list()
             for word in doc:        
                 node_relations.append([word.i,word.head.i])
-                # 加上自环
+                # Add self-loops
                 # if word.i != word.head.i:
                 #     node_relations.append([word.i,word.i])
             edge0 = list()
@@ -79,7 +79,7 @@ def build_graph(json_texts):
             print(e)
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f"运行时间: {elapsed_time} 秒")
+    print(f"Elapsed time: {elapsed_time} seconds")
     return all_token_embeddings, all_edge_index, y
 
 def read_json(file_name):

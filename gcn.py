@@ -8,7 +8,7 @@
 # 
 # torch-sparse==0.6.13
 
-# 训练模型
+# Train model
 
 
 import os
@@ -31,7 +31,7 @@ from datetime import datetime
 from tqdm import tqdm
 import time
 
-# 构建 GCN 模型
+# Build GCN model
 class GCN2(nn.Module):
     def __init__(self,  input_dim, hidden_dim, output_dim):
         super(GCN2, self).__init__()
@@ -87,11 +87,11 @@ torch.cuda.manual_seed(seed)
 torch.cuda.manual_seed_all(seed) 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-input_dim = 768  # 输入维度
-hidden_dim = 512  # 隐藏层维度
-hidden_dim2 = 256  # 隐藏层维度
-hidden_dim3 = 128  # 隐藏层维度
-output_dim = 64  # 输出类别数
+input_dim = 768  # Input dimension
+hidden_dim = 512  # Hidden layer dimension
+hidden_dim2 = 256  # Hidden layer dimension 2
+hidden_dim3 = 128  # Hidden layer dimension 3
+output_dim = 64  # Output dimension
 gcnmodel = GCN2(input_dim, hidden_dim2, output_dim).to(device)
 # gcnmodel = GCN4(input_dim, hidden_dim, hidden_dim2, hidden_dim3, output_dim)
 optimizer = optim.Adam(gcnmodel.parameters(), lr=0.0001)
@@ -108,7 +108,7 @@ val_max_acc = -1
 writer = SummaryWriter(f'logs/{dataset_name}_{seed}'+ datetime.now().strftime("%Y%m%d-%H%M%S"))
 start_time = time.time()
 for epoch in range(epochs):
-    # 训练集
+    # Training set
     gcnmodel.train()
     epoch_loss = 0.0
     correct_predictions = 0
@@ -131,7 +131,7 @@ for epoch in range(epochs):
     train_loss.append(epoch_loss)
     train_acc.append(epoch_acc)
     
-    # 验证集
+    # Validation set
     gcnmodel.eval()
     epoch_loss = 0.0
     correct_predictions = 0
@@ -165,10 +165,10 @@ for epoch in range(epochs):
             break
 end_time = time.time()
 elapsed_time = end_time - start_time
-print(f"运行时间: {elapsed_time} 秒")
+print(f"Elapsed time: {elapsed_time} seconds")
 writer.close()
 
-# 测试
+# Testing
 
 import pickle
 test_file = "hc3_test"
@@ -197,7 +197,7 @@ with torch.no_grad():
         correct_predictions += (predictions == data.y.view(-1, 1)).sum().item()
 end_time = time.time()
 elapsed_time = end_time - start_time
-print(f"运行时间: {elapsed_time} 秒")
+print(f"Elapsed time: {elapsed_time} seconds")
 y_pred = [1 if prob >= 0.5 else 0 for prob in test_pres]
 y_true = hc3_test['y'].view(-1, 1)
 test_loss /= test_len
