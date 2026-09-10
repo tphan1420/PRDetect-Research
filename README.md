@@ -3,14 +3,15 @@
 
 ### Installation
 ```shell
-pip install -r requirements.txt
-pip -m spacy download en_core_web_sm
+!pip install torch_geometric
+!python -m spacy download en_core_web_sm
+
 ```
 
 ### Train
 ```shell
-python build_graph.py
-python gcn.py
+!python building_graph.py
+!python gcn.py
 ```
 
 ### Detect
