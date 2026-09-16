@@ -2,6 +2,7 @@ logs/
 roberta-base/
 gpt2-detector/
 .ipynb_checkpoints/
+datasets/
 *.pth
 *.jpg
 *.png
