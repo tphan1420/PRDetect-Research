@@ -91,7 +91,18 @@ flowchart LR
 - Tầng đầu ra: Lớp tuyến tính `Linear(output_dim, 1)` gom đặc trưng bằng `Mean Pooling` qua toàn bộ các nút trong câu và đưa qua hàm `Sigmoid` để tính xác suất văn bản do con người viết ($y=1$) hay máy sinh ($y=0$).
 - Hàm mục tiêu huấn luyện: Binary Cross-Entropy Loss (BCELoss).
 
-### 3.4. Cơ chế mô phỏng nhiễu thực tế (Realistic Perturbation)
+### 3.4. Cải tiến Đột phá: Mạng Tích chập Đa Quan hệ (Relational GCN - RGCN)
+
+Nhằm khắc phục nhược điểm của việc san phẳng cây cú pháp thành ma trận nhị phân đồng nhất (Mục 3 trong `update.md`), hệ thống đã được nâng cấp với kiến trúc **RGCN (Relational Graph Convolutional Network)**:
+- **Biểu diễn đa quan hệ:** Phân biệt hơn 60 loại quan hệ cú pháp phụ thuộc (`nsubj`, `dobj`, `amod`, `prep`, `pobj`, `advmod`, `compound`, `punct`, `ROOT`,...).
+- **Cơ chế cập nhật trạng thái ẩn có trọng số theo quan hệ:**
+  $$h_{i}^{(l+1)} = \sigma\left(\sum_{r\in\mathcal{R}}\sum_{j\in\mathcal{N}_{i}^{r}}\frac{1}{c_{i,r}}W_{r}^{(l)}h_{j}^{(l)} + W_{0}^{(l)}h_{i}^{(l)}\right)$$
+  - $W_r^{(l)}$: Ma trận trọng số đặc thù cho từng loại quan hệ cú pháp $r \in \mathcal{R}$.
+  - $W_0^{(l)}$: Ma trận biến đổi tự lặp (root weight) bảo toàn bản sắc của node trung tâm.
+  - $c_{i,r}$: Hằng số chuẩn hóa cấu trúc theo bậc quan hệ.
+  - **Phân rã cơ sở (Basis-decomposition):** Giảm thiểu tham số thông qua $W_r = \sum_{b=1}^{B} a_{rb} V_b$ với $B = 30$, ngăn chặn quá khớp (overfitting) trên tập RAID khi số lượng quan hệ lớn.
+
+### 3.5. Cơ chế mô phỏng nhiễu thực tế (Realistic Perturbation)
 Để kiểm thử độ bền bỉ (robustness) trong điều kiện mô phỏng chỉnh sửa của con người:
 - Lọc các từ loại mục tiêu (tính từ - adjectives) bằng SpaCy.
 - Dùng từ điển `WordNet` (NLTK) để lấy danh sách từ đồng nghĩa phù hợp nhất và thay thế ở các tỷ lệ: **5%, 10%, 20%, 30%**.
@@ -144,26 +155,33 @@ PRDetect-Research/
 ├── requirements.txt               # Các thư viện phụ thuộc của dự án
 │
 ├── convert_datasets.py          # Script chuyển đổi dataset từ RAID/DetectRL sang format chuẩn
-├── building_graph.py              # Script trích xuất Dependency Tree & sinh đồ thị (pickle)
-├── building_graph.ipynb           # Notebook tương tác quá trình xây dựng đồ thị
-├── gcn.py                         # File định nghĩa kiến trúc GCN (GCN2, GCN4) & huấn luyện
-├── detect.py                      # CLI tool suy luận dự đoán cho một đoạn văn bản tùy ý
-├── test.py                        # Script đánh giá mô hình trên các tập dữ liệu nhiễu
-├── test_result.txt                # Nhật ký kết quả thực nghiệm chi tiết
-├── drawtree.py                    # Script vẽ trực quan hóa cây cú pháp
+├── dep_vocab.py                 # Quản lý từ điển quan hệ cú pháp phụ thuộc (RGCN Dependency Vocab)
+├── dep_vocab.json               # Bảng tra cứu nhãn quan hệ cú pháp chuẩn hóa (60+ relations)
+├── building_graph.py            # Script trích xuất Dependency Tree & sinh đồ thị (edge_index, edge_type)
+├── building_graph.ipynb         # Notebook tương tác quá trình xây dựng đồ thị
+├── gcn.py                       # File định nghĩa kiến trúc GCN (GCN2, GCN4) & huấn luyện
+├── rgcn.py                      # Script huấn luyện Mạng Tích chập Đồ thị Quan hệ (RGCN)
+├── detect.py                    # CLI tool suy luận dự đoán cho một đoạn văn bản tùy ý (hỗ trợ GCN & RGCN)
+├── test.py                      # Script đánh giá mô hình trên các tập dữ liệu nhiễu (--model_type gcn|rgcn)
+├── test_rgcn.py                 # Script chuyên dụng kiểm thử mô hình RGCN đa quan hệ
+├── test_result.txt              # Nhật ký kết quả thực nghiệm chi tiết
+├── drawtree.py                  # Script vẽ trực quan hóa cây cú pháp
 │
-├── datasets/                      # Thư mục chứa các bộ dữ liệu tải về (RAID, DetectRL,...)
-│   ├── raid_dataset/              # 48 file JSON của benchmark RAID (GPT-2, LLaMA, Mistral, MPT,...)
-│   └── detectrl_dataset/          # Dữ liệu DetectRL (main, attack, domain, length,...)
+├── datasets/                    # Thư mục chứa các bộ dữ liệu tải về (RAID, DetectRL,...)
+│   ├── raid_dataset/            # 48 file JSON của benchmark RAID (GPT-2, LLaMA, Mistral, MPT,...)
+│   └── detectrl_dataset/        # Dữ liệu DetectRL (main, attack, domain, length,...)
 │
-├── model/                         # Lưu các trọng số mô hình đã huấn luyện (.pth)
-│   ├── hc3_gcn_model_*.pth        # Trọng số huấn luyện trên tập HC3 theo các random seed
-│   └── gpt3.5_gcn_model_*.pth     # Trọng số huấn luyện trên tập GPT3.5-Mixed
+├── model/                       # Định nghĩa mô hình và lưu trọng số checkpoint (.pth)
+│   ├── GCN2.py                  # Kiến trúc GCN thuần 2 tầng
+│   ├── RGCN.py                  # Kiến trúc Mạng Tích chập Đa Quan hệ (RGCN2, RGCN4, RelationalGCN)
+│   ├── hc3_gcn_model_*.pth      # Trọng số GCN huấn luyện trên tập HC3
+│   ├── hc3_rgcn_model_*.pth     # Trọng số RGCN huấn luyện trên tập HC3
+│   └── gpt3.5_gcn_model_*.pth   # Trọng số huấn luyện trên tập GPT3.5-Mixed
 │
-├── original_text/                 # Chứa dữ liệu gốc (HC3, GPT3.5-Mixed JSON files)
-├── perturbed_text/                # Dữ liệu đã áp dụng các kỹ thuật gây nhiễu
-├── graph_data/                    # Dữ liệu đồ thị dạng tensor đã tiền xử lý (.pkl)
-├── output/ & logs/                # Thư mục lưu trữ log và tensorboard
+├── original_text/               # Chứa dữ liệu gốc (HC3, GPT3.5-Mixed, RAID JSON files)
+├── perturbed_text/              # Dữ liệu đã áp dụng các kỹ thuật gây nhiễu
+├── graph_data/                  # Dữ liệu đồ thị dạng tensor (.pkl, gồm embeddings, edge_index, edge_type)
+├── output/ & logs/              # Thư mục lưu trữ log và tensorboard
 │
 └── Các Jupyter Notebooks phân tích sâu:
     ├── depth_analyze.ipynb        # Phân tích độ sâu của cây cú pháp
@@ -212,40 +230,69 @@ File sau khi chuyển đổi sẽ tự động nằm ở `original_text/<tên_ou
 
 ### 6.3. Các bước huấn luyện (Training Pipeline)
 
-1. **Bước 1: Tiền xử lý & Xây dựng đồ thị cú pháp**  
+1. **Bước 1: Tiền xử lý & Xây dựng đồ thị cú pháp đa quan hệ**  
    Chỉ định trực tiếp file cần build đồ thị cú pháp qua tham số `--file` (hoặc `-f`):
    ```bash
-   # Build đồ thị cho 1 tập test cụ thể (VD: raid_gpt2_test)
+   # Build đồ thị đa quan hệ cho 1 tập test cụ thể (VD: raid_gpt2_test)
    python building_graph.py --file raid_gpt2_test
 
    # Hoặc build cho nhiều file cùng lúc:
    python building_graph.py -f file1 file2 file3
 
+   # Tùy chọn: Bật cạnh hai chiều kèm quan hệ đảo (bidirectional)
+   python building_graph.py --file raid_gpt2_test --bidirectional
+
    # Nếu không truyền tham số, mặc định sẽ build bộ 3 file: hc3_train, hc3_val, hc3_test
    python building_graph.py
    ```
-   *File đồ thị sinh ra sẽ tự động được lưu vào `graph_data/<tên_file>.pkl`.*
+   *File đồ thị sinh ra sẽ tự động được lưu vào `graph_data/<tên_file>.pkl` bao gồm cả `all_edge_type`.*
 
-2. **Bước 2: Huấn luyện mô hình GCN**  
-   Huấn luyện mạng GCN trên đồ thị cú pháp và lưu checkpoint vào thư mục `model/`:
-   ```bash
-   python gcn.py
-   ```
+2. **Bước 2: Huấn luyện mô hình**  
+   - **Cách 1: Huấn luyện mô hình RGCN đa quan hệ (Đề xuất cải tiến Mục 3 Update.md)**:
+     ```bash
+     # Huấn luyện RGCN 2 tầng với basis decomposition:
+     python rgcn.py --dataset hc3 --seed 2024 --epochs 40 --lr 0.0001 --num_layers 2 --num_bases 30
+
+     # Huấn luyện RGCN 4 tầng cho văn bản dài, phức tạp:
+     python rgcn.py --dataset hc3 --seed 2024 --epochs 40 --num_layers 4
+     ```
+     *Trọng số tốt nhất sẽ tự động lưu vào `model/<dataset>_rgcn_model_<seed>.pth`.*
+
+   - **Cách 2: Huấn luyện mạng GCN thuần 2 tầng (Baseline)**:
+     ```bash
+     python gcn.py
+     ```
+     *Trọng số lưu vào `model/<dataset>_gcn_model_<seed>.pth`.*
 
 ### 6.4. Kiểm thử & Đánh giá trên tập dữ liệu mới (Evaluation)
-Chạy kiểm thử độ chính xác trên file đã sinh trong `graph_data/`:
-```bash
-python test.py --file raid_gpt2_test --dataset hc3 --seed 2024 -s
-```
+
+- **Đánh giá mô hình RGCN đa quan hệ**:
+  ```bash
+  # Sử dụng script chuyên dụng test_rgcn.py:
+  python test_rgcn.py --file raid_gpt2_test --dataset hc3 --seed 2024 -s
+
+  # Hoặc dùng test.py với cờ --model_type rgcn:
+  python test.py --file raid_gpt2_test --dataset hc3 --seed 2024 --model_type rgcn -s
+  ```
+
+- **Đánh giá mô hình GCN thuần (Baseline)**:
+  ```bash
+  python test.py --file raid_gpt2_test --dataset hc3 --seed 2024 --model_type gcn -s
+  ```
 
 ### 6.5. Dự đoán văn bản mới (Inference CLI)
 Sử dụng script `detect.py` để phân loại một câu văn bản bất kỳ:
 ```bash
-python detect.py --text "There are many factors that contribute to the intelligence gap between humans and other organisms." --dataset hc3 --seed 2024
+# Suy luận bằng mô hình RGCN (Mặc định):
+python detect.py --text "There are many factors that contribute to the intelligence gap between humans and other organisms." --dataset hc3 --seed 2024 --model_type rgcn
+
+# Suy luận bằng mô hình GCN truyền thống:
+python detect.py --text "There are many factors that contribute to the intelligence gap between humans and other organisms." --dataset hc3 --seed 2024 --model_type gcn
 ```
 **Kết quả trả về:**
-- `probability`: Xác suất văn bản là do con người viết (từ 0.0 đến 1.0).
-- `prediction`: Nhãn dự đoán (`1`: Human, `0`: Machine/LLM).
+- `Mô hình`: RGCN / GCN
+- `Xác suất Human`: Xác suất văn bản là do con người viết (từ 0.0 đến 1.0).
+- `Nhãn dự đoán`: `1`: Human-written (Người viết), `0`: AI/LLM-generated (Máy sinh).
 
 ---
 

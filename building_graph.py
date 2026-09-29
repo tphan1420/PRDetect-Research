@@ -35,28 +35,47 @@ def init_models():
         model = RobertaModel.from_pretrained("roberta-base").to(device)
         tokenizer = RobertaTokenizer.from_pretrained("roberta-base", do_lower_case=False)
 
-def build_graph(json_texts):
+def build_graph(json_texts, return_edge_type=True, bidirectional=False):
+    """
+    Xây dựng cây cú pháp phụ thuộc và biểu diễn nhúng node cho tập văn bản.
+    
+    Tham số:
+        json_texts: Danh sách chuỗi JSON {"text": ..., "label": ...}
+        return_edge_type: Nếu True, trả về thêm all_edge_type cho RGCN.
+        bidirectional: Nếu True, thêm cạnh đảo chiều và nhãn quan hệ đảo tương ứng.
+    
+    Trả về:
+        all_token_embeddings, all_edge_index, [all_edge_type], y
+    """
     init_models()
     import torch
     from tqdm import tqdm
+    from dep_vocab import get_default_vocab
+    
+    vocab = get_default_vocab()
     start_time = time.time()
     texts = list()
     y = list()
     for json_text in json_texts:
-        texts.append(json.loads(json_text)['text'])
-        label = 1 if "human" in json.loads(json_text)['label'] else 0
+        data = json.loads(json_text)
+        texts.append(data['text'])
+        label = 1 if "human" in data.get('label', '') else 0
         y.append(label)
     y = torch.tensor(y, dtype=torch.float32)
+
     tokenized_sentences = list()
     all_token_embeddings = list()
     all_edge_index = list()
-    all_sparse_adj_matrix = list()
-    for text in tqdm(texts):
+    all_edge_type = list()
+    valid_indices = list()
+
+    for idx, text in enumerate(tqdm(texts, desc="Building Graph")):
         try:
             doc = nlp(text)
             tokenized_sentence = [token.text for token in doc]
+            if len(tokenized_sentence) == 0:
+                continue
             tokenized_sentences.append(tokenized_sentence)
-            # print(tokenized_sentence)
             
             max_length = 512
             chunks = [tokenized_sentence[i:i+max_length] for i in range(0, len(tokenized_sentence), max_length)]
@@ -70,33 +89,44 @@ def build_graph(json_texts):
                 last_hidden_states = output.last_hidden_state
                 token_embeddings = last_hidden_states[0]
                 chunk_outputs.append(token_embeddings)
-            token_embeddings = torch.cat(chunk_outputs, dim=0)
-            all_token_embeddings.append(token_embeddings)
-            # print(len(tokenized_sentence))
-            # print(token_embeddings.shape)
-            node_relations = list()
-            for word in doc:        
-                node_relations.append([word.i,word.head.i])
-                # Add self-loops
-                # if word.i != word.head.i:
-                #     node_relations.append([word.i,word.i])
+            token_embeddings = torch.cat(chunk_outputs, dim=0).cpu()
+
             edge0 = list()
             edge1 = list()
-            for edge in node_relations:
-                edge0.append(edge[0])
-                edge1.append(edge[1])
+            edge_types = list()
+            for word in doc:
+                # Cạnh phụ thuộc: dependent -> head
+                edge0.append(word.i)
+                edge1.append(word.head.i)
+                rel_id = vocab.encode(word.dep_)
+                edge_types.append(rel_id)
+
+                if bidirectional and word.i != word.head.i:
+                    # Cạnh ngược: head -> dependent với quan hệ đảo
+                    edge0.append(word.head.i)
+                    edge1.append(word.i)
+                    rev_rel_id = vocab.encode(f"{word.dep_}_rev", allow_new=True)
+                    edge_types.append(rev_rel_id)
+
             edge_index = torch.tensor([edge0, edge1], dtype=torch.long)
+            edge_type = torch.tensor(edge_types, dtype=torch.long)
+
+            all_token_embeddings.append(token_embeddings)
             all_edge_index.append(edge_index)
-            # sparse_adj_matrix = csr_matrix((np.ones(len(edge0)),(np.array(edge0), np.array(edge1))),shape=(len(tokenized_sentence),len(tokenized_sentence)))
-            # dependency_matrix = sparse_adj_matrix
-            # print(sparse_adj_matrix)
-            # all_sparse_adj_matrix.append(sparse_adj_matrix)
+            all_edge_type.append(edge_type)
+            valid_indices.append(idx)
         except Exception as e:
-            print(text)
-            print(e)
+            print(f"[!] Lỗi tại mẫu #{idx}: {e}")
+
+    if len(valid_indices) < len(y):
+        y = y[valid_indices]
+
     end_time = time.time()
     elapsed_time = end_time - start_time
-    print(f"Elapsed time: {elapsed_time} seconds")
+    print(f"Elapsed time: {elapsed_time:.2f} seconds | Tổng mẫu hợp lệ: {len(all_edge_index)}")
+
+    if return_edge_type:
+        return all_token_embeddings, all_edge_index, all_edge_type, y
     return all_token_embeddings, all_edge_index, y
 
 def read_json(file_name):
@@ -117,22 +147,32 @@ def read_json(file_name):
                 texts.append(line)
     return texts
 
-def save_pkl(file_name, all_token_embeddings, all_edge_index, y):
+def save_pkl(file_name, all_token_embeddings, all_edge_index, y, all_edge_type=None):
     base_name = os.path.splitext(os.path.basename(file_name))[0]
     os.makedirs("./graph_data", exist_ok=True)
     out_path = f"./graph_data/{base_name}.pkl"
+    save_dict = {
+        "all_token_embeddings": all_token_embeddings,
+        "all_edge_index": all_edge_index,
+        "y": y
+    }
+    if all_edge_type is not None:
+        save_dict["all_edge_type"] = all_edge_type
     with open(out_path, "wb") as f:
-        pickle.dump({"all_token_embeddings": all_token_embeddings,
-                     "all_edge_index": all_edge_index,
-                     "y": y}, f)
-    print(f"[OK] Đã lưu dữ liệu đồ thị thành công tại: {out_path}")
+        pickle.dump(save_dict, f)
+    has_rel = "CÓ quan hệ đa loại (RGCN)" if all_edge_type is not None else "không có quan hệ (GCN thuần)"
+    print(f"[OK] Đã lưu dữ liệu đồ thị thành công tại: {out_path} ({has_rel})")
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description="Xây dựng Cây cú pháp và Đồ thị đặc trưng (Graph Data) cho PRDetect")
+    parser = argparse.ArgumentParser(description="Xây dựng Cây cú pháp Đa quan hệ (RGCN) và Đồ thị đặc trưng cho PRDetect")
     parser.add_argument(
         "--file", "-f", nargs="+", default=None,
         help="Tên file hoặc danh sách các file trong original_text/ cần build graph (VD: --file raid_gpt2_test hoặc -f f1 f2)"
+    )
+    parser.add_argument(
+        "--bidirectional", "-b", action="store_true",
+        help="Thêm cạnh hai chiều và quan hệ đảo (inverse relations) cho cây cú pháp."
     )
     args = parser.parse_args()
 
@@ -151,5 +191,7 @@ if __name__ == '__main__':
         print(f"\n[Processing] Đang xử lý xây dựng đồ thị cho: {base_name} ...")
         json_data = read_json(file)
         print(f"-> Đã đọc {len(json_data)} mẫu văn bản từ original_text/{base_name}.json")
-        all_token_embeddings, all_edge_index, y = build_graph(json_data)
-        save_pkl(base_name, all_token_embeddings, all_edge_index, y)
+        all_token_embeddings, all_edge_index, all_edge_type, y = build_graph(
+            json_data, return_edge_type=True, bidirectional=args.bidirectional
+        )
+        save_pkl(base_name, all_token_embeddings, all_edge_index, y, all_edge_type=all_edge_type)

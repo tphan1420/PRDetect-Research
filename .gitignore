@@ -6,5 +6,8 @@ datasets/
 *.pth
 *.jpg
 *.png
-
-
+__pycache__/
+*.pyc
+graph_data/
+result/
+.pytest_cache/
