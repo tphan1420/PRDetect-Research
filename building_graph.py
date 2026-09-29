@@ -131,15 +131,27 @@ def build_graph(json_texts, return_edge_type=True, bidirectional=False):
 
 def read_json(file_name):
     # Loại bỏ đuôi .json nếu người dùng truyền vào
-    if file_name.endswith(".json"):
-        file_name = file_name[:-5]
-    if os.path.exists(f"original_text/{file_name}.json"):
-        target_path = f"original_text/{file_name}.json"
-    elif os.path.exists(f"{file_name}.json"):
-        target_path = f"{file_name}.json"
-    else:
-        target_path = f"original_text/{file_name}.json"
+    clean_name = file_name[:-5] if file_name.endswith(".json") else file_name
 
+    candidates = [
+        os.path.join("original_text", f"{clean_name}.json"),
+        os.path.join("perturbed_text", f"{clean_name}.json"),
+        f"{clean_name}.json",
+        file_name
+    ]
+
+    target_path = None
+    for cand in candidates:
+        if os.path.exists(cand):
+            target_path = cand
+            break
+
+    if target_path is None:
+        raise FileNotFoundError(
+            f"Không tìm thấy file '{file_name}' trong original_text/ hoặc perturbed_text/!"
+        )
+
+    print(f"-> Nạp văn bản từ: {target_path}")
     texts = list()
     with open(target_path, "r", encoding="utf-8") as f:
         for line in f.readlines():
