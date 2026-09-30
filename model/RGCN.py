@@ -19,10 +19,38 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 try:
-    from torch_geometric.nn import RGCNConv
+    from torch_geometric.nn import RGCNConv, global_mean_pool, global_max_pool, global_add_pool
     HAS_PYG = True
 except ImportError:
     HAS_PYG = False
+
+    def global_mean_pool(x: torch.Tensor, batch: torch.Tensor, size: int = None) -> torch.Tensor:
+        if size is None:
+            size = int(batch.max().item() + 1) if batch.numel() > 0 else 0
+        out = torch.zeros((size, x.size(-1)), device=x.device, dtype=x.dtype)
+        count = torch.zeros((size, 1), device=x.device, dtype=x.dtype)
+        out.index_add_(0, batch, x)
+        count.index_add_(0, batch, torch.ones((batch.size(0), 1), device=x.device, dtype=x.dtype))
+        return out / count.clamp(min=1.0)
+
+    def global_add_pool(x: torch.Tensor, batch: torch.Tensor, size: int = None) -> torch.Tensor:
+        if size is None:
+            size = int(batch.max().item() + 1) if batch.numel() > 0 else 0
+        out = torch.zeros((size, x.size(-1)), device=x.device, dtype=x.dtype)
+        out.index_add_(0, batch, x)
+        return out
+
+    def global_max_pool(x: torch.Tensor, batch: torch.Tensor, size: int = None) -> torch.Tensor:
+        if size is None:
+            size = int(batch.max().item() + 1) if batch.numel() > 0 else 0
+        out = torch.full((size, x.size(-1)), -float('inf'), device=x.device, dtype=x.dtype)
+        for i in range(size):
+            mask = (batch == i)
+            if mask.any():
+                out[i] = x[mask].max(dim=0)[0]
+            else:
+                out[i] = 0.0
+        return out
 
     class RGCNConv(nn.Module):
         r"""
@@ -136,11 +164,12 @@ class RGCN2(nn.Module):
         self.fc = nn.Linear(output_dim, 1)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, data, edge_index=None, edge_type=None):
+    def forward(self, data, edge_index=None, edge_type=None, batch=None):
         if hasattr(data, 'x'):
             x = data.x
             edge_index = data.edge_index
             edge_type = getattr(data, 'edge_type', None)
+            batch = getattr(data, 'batch', None)
         else:
             x = data
 
@@ -157,7 +186,10 @@ class RGCN2(nn.Module):
         x = self.dropout(x)
 
         x = self.fc(x)
-        x = torch.mean(x, dim=0, keepdim=True)
+        if batch is not None:
+            x = global_mean_pool(x, batch)
+        else:
+            x = torch.mean(x, dim=0, keepdim=True)
         return torch.sigmoid(x)
 
 
@@ -184,11 +216,12 @@ class RGCN4(nn.Module):
         self.fc = nn.Linear(output_dim, 1)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, data, edge_index=None, edge_type=None):
+    def forward(self, data, edge_index=None, edge_type=None, batch=None):
         if hasattr(data, 'x'):
             x = data.x
             edge_index = data.edge_index
             edge_type = getattr(data, 'edge_type', None)
+            batch = getattr(data, 'batch', None)
         else:
             x = data
 
@@ -212,7 +245,10 @@ class RGCN4(nn.Module):
         x = self.dropout(x)
 
         x = self.fc(x)
-        x = torch.mean(x, dim=0, keepdim=True)
+        if batch is not None:
+            x = global_mean_pool(x, batch)
+        else:
+            x = torch.mean(x, dim=0, keepdim=True)
         return torch.sigmoid(x)
 
 
@@ -245,11 +281,12 @@ class RelationalGCN(nn.Module):
                                    num_bases=num_bases, root_weight=True)
         self.fc = nn.Linear(output_dim, 1)
 
-    def forward(self, data, edge_index=None, edge_type=None):
+    def forward(self, data, edge_index=None, edge_type=None, batch=None):
         if hasattr(data, 'x'):
             x = data.x
             edge_index = data.edge_index
             edge_type = getattr(data, 'edge_type', None)
+            batch = getattr(data, 'batch', None)
         else:
             x = data
 
@@ -267,11 +304,19 @@ class RelationalGCN(nn.Module):
 
         x = self.fc(x)
 
-        if self.pooling == "max":
-            x, _ = torch.max(x, dim=0, keepdim=True)
-        elif self.pooling == "sum":
-            x = torch.sum(x, dim=0, keepdim=True)
+        if batch is not None:
+            if self.pooling == "max":
+                x = global_max_pool(x, batch)
+            elif self.pooling == "sum":
+                x = global_add_pool(x, batch)
+            else:
+                x = global_mean_pool(x, batch)
         else:
-            x = torch.mean(x, dim=0, keepdim=True)
+            if self.pooling == "max":
+                x, _ = torch.max(x, dim=0, keepdim=True)
+            elif self.pooling == "sum":
+                x = torch.sum(x, dim=0, keepdim=True)
+            else:
+                x = torch.mean(x, dim=0, keepdim=True)
 
         return torch.sigmoid(x)

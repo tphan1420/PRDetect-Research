@@ -35,26 +35,83 @@ except ImportError:
         return 0.0
 
 try:
-    from torch_geometric.data import Data
+    from torch_geometric.loader import DataLoader
+    from torch_geometric.data import Data, Batch
 except ImportError:
-    # Lớp Data tối giản tương thích nếu chưa có PyG
-    class Data:
-        def __init__(self, x=None, edge_index=None, edge_type=None, y=None):
-            self.x = x
-            self.edge_index = edge_index
-            self.edge_type = edge_type
-            self.y = y
+    try:
+        from torch_geometric.data import DataLoader, Data, Batch
+    except ImportError:
+        # Fallback pure-PyTorch Data, Batch, DataLoader khi chưa có torch_geometric
+        class Data:
+            def __init__(self, x=None, edge_index=None, edge_type=None, y=None):
+                self.x = x
+                self.edge_index = edge_index
+                self.edge_type = edge_type
+                self.y = y
 
-        def to(self, device):
-            if self.x is not None:
+            def to(self, device):
+                if self.x is not None:
+                    self.x = self.x.to(device)
+                if self.edge_index is not None:
+                    self.edge_index = self.edge_index.to(device)
+                if self.edge_type is not None:
+                    self.edge_type = self.edge_type.to(device)
+                if self.y is not None:
+                    self.y = self.y.to(device)
+                return self
+
+        class Batch:
+            def __init__(self, x, edge_index, edge_type, y, batch):
+                self.x = x
+                self.edge_index = edge_index
+                self.edge_type = edge_type
+                self.y = y
+                self.batch = batch
+                self.num_graphs = int(batch.max().item() + 1) if batch.numel() > 0 else 0
+
+            def to(self, device):
                 self.x = self.x.to(device)
-            if self.edge_index is not None:
                 self.edge_index = self.edge_index.to(device)
-            if self.edge_type is not None:
-                self.edge_type = self.edge_type.to(device)
-            if self.y is not None:
+                if self.edge_type is not None:
+                    self.edge_type = self.edge_type.to(device)
                 self.y = self.y.to(device)
-            return self
+                self.batch = self.batch.to(device)
+                return self
+
+        def _fallback_collate(data_list):
+            xs, edge_indices, edge_types, ys, batches = [], [], [], [], []
+            node_offset = 0
+            for graph_idx, data in enumerate(data_list):
+                num_nodes = data.x.size(0)
+                xs.append(data.x)
+                if data.edge_index.numel() > 0:
+                    edge_indices.append(data.edge_index + node_offset)
+                else:
+                    edge_indices.append(data.edge_index)
+                if getattr(data, 'edge_type', None) is not None:
+                    edge_types.append(data.edge_type)
+                y_val = data.y
+                if not isinstance(y_val, torch.Tensor):
+                    y_val = torch.tensor([y_val])
+                ys.append(y_val.view(-1))
+                batches.append(torch.full((num_nodes,), graph_idx, dtype=torch.long))
+                node_offset += num_nodes
+
+            batched_x = torch.cat(xs, dim=0)
+            batched_edge_index = torch.cat(edge_indices, dim=1) if len(edge_indices) > 0 else torch.zeros((2, 0), dtype=torch.long)
+            batched_edge_type = torch.cat(edge_types, dim=0) if len(edge_types) > 0 else None
+            batched_y = torch.cat(ys, dim=0)
+            batched_batch = torch.cat(batches, dim=0)
+            return Batch(batched_x, batched_edge_index, batched_edge_type, batched_y, batched_batch)
+
+        from torch.utils.data import DataLoader as TorchDataLoader
+        class DataLoader:
+            def __init__(self, dataset, batch_size=1, shuffle=False, **kwargs):
+                self._loader = TorchDataLoader(dataset, batch_size=batch_size, shuffle=shuffle, collate_fn=_fallback_collate, **kwargs)
+            def __iter__(self):
+                return iter(self._loader)
+            def __len__(self):
+                return len(self._loader)
 
 from model.RGCN import RGCN2, RGCN4, RelationalGCN
 from dep_vocab import get_default_vocab
@@ -75,6 +132,34 @@ def load_graph_data(file_path):
         ]
 
     return data
+
+
+def create_pyg_data_list(graph_dict):
+    """Chuyển đổi dữ liệu thô sang danh sách đối tượng Data để đưa vào DataLoader"""
+    data_list = []
+    n_samples = len(graph_dict['y'])
+    all_embeddings = graph_dict['all_token_embeddings']
+    all_edge_index = graph_dict['all_edge_index']
+    all_edge_type = graph_dict.get('all_edge_type', None)
+    all_y = graph_dict['y']
+
+    for i in range(n_samples):
+        e_type = all_edge_type[i] if all_edge_type is not None else torch.zeros(all_edge_index[i].size(1), dtype=torch.long)
+        y_val = all_y[i]
+        if not isinstance(y_val, torch.Tensor):
+            y_tensor = torch.tensor([y_val], dtype=torch.float)
+        elif y_val.dim() == 0:
+            y_tensor = y_val.unsqueeze(0).float()
+        else:
+            y_tensor = y_val.float()
+
+        data_list.append(Data(
+            x=all_embeddings[i],
+            edge_index=all_edge_index[i],
+            edge_type=e_type,
+            y=y_tensor
+        ))
+    return data_list
 
 
 def train_rgcn(args):
@@ -106,6 +191,13 @@ def train_rgcn(args):
     train_len = len(train_data['y'])
     val_len = len(val_data['y'])
     print(f"-> Số mẫu Train: {train_len} | Số mẫu Val: {val_len}")
+
+    print(f"-> Đang chuẩn bị DataLoader Mini-Batching (batch_size={args.batch_size}) ...")
+    train_dataset = create_pyg_data_list(train_data)
+    val_dataset = create_pyg_data_list(val_data)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+    print(f"-> Số mini-batch Train: {len(train_loader)} | Số mini-batch Val: {len(val_loader)}")
 
     # Khởi tạo mô hình RGCN
     input_dim = args.input_dim
@@ -171,62 +263,59 @@ def train_rgcn(args):
     start_time = time.time()
 
     for epoch in range(epochs):
-        # 1. Quá trình Huấn luyện (Training)
+        # 1. Quá trình Huấn luyện (Training) với Mini-Batching
         model.train()
         epoch_loss = 0.0
         correct_predictions = 0
+        total_train_samples = 0
 
-        pbar = tqdm(range(train_len), desc=f"Epoch {epoch+1}/{epochs} [Train]")
-        for i in pbar:
-            data = Data(
-                x=train_data['all_token_embeddings'][i],
-                edge_index=train_data['all_edge_index'][i],
-                edge_type=train_data['all_edge_type'][i],
-                y=train_data['y'][i]
-            ).to(device)
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Train]")
+        for batch in pbar:
+            batch = batch.to(device)
 
             optimizer.zero_grad()
-            outputs = model(data)
-            loss = criterion(outputs, data.y.float().view(-1, 1))
+            outputs = model(batch)
+            loss = criterion(outputs, batch.y.float().view(-1, 1))
             loss.backward()
             optimizer.step()
 
+            bsz = batch.num_graphs if hasattr(batch, 'num_graphs') else batch.y.size(0)
+            total_train_samples += bsz
             loss_val = loss.item()
-            epoch_loss += loss_val
+            epoch_loss += loss_val * bsz
+
             prediction = (outputs >= 0.5).long()
-            correct = (prediction == data.y.view(-1, 1)).sum().item()
+            correct = (prediction == batch.y.view(-1, 1)).sum().item()
             correct_predictions += correct
 
-            pbar.set_postfix({"loss": f"{loss_val:.4f}", "acc": f"{correct_predictions / (i+1):.4f}"})
+            pbar.set_postfix({"loss": f"{loss_val:.4f}", "acc": f"{correct_predictions / total_train_samples:.4f}"})
 
-        train_loss = epoch_loss / train_len
-        train_acc = correct_predictions / train_len
+        train_loss = epoch_loss / total_train_samples
+        train_acc = correct_predictions / total_train_samples
 
-        # 2. Quá trình Kiểm định (Validation)
+        # 2. Quá trình Kiểm định (Validation) với Mini-Batching
         model.eval()
         val_epoch_loss = 0.0
         val_correct = 0
+        total_val_samples = 0
         all_val_pres = []
 
         with torch.no_grad():
-            for i in range(val_len):
-                data = Data(
-                    x=val_data['all_token_embeddings'][i],
-                    edge_index=val_data['all_edge_index'][i],
-                    edge_type=val_data['all_edge_type'][i],
-                    y=val_data['y'][i]
-                ).to(device)
+            for batch in val_loader:
+                batch = batch.to(device)
 
-                outputs = model(data)
-                loss = criterion(outputs, data.y.float().view(-1, 1))
-                val_epoch_loss += loss.item()
+                outputs = model(batch)
+                loss = criterion(outputs, batch.y.float().view(-1, 1))
+                bsz = batch.num_graphs if hasattr(batch, 'num_graphs') else batch.y.size(0)
+                total_val_samples += bsz
+                val_epoch_loss += loss.item() * bsz
 
-                all_val_pres.append(outputs.item())
+                all_val_pres.extend(outputs.view(-1).cpu().tolist())
                 prediction = (outputs >= 0.5).long()
-                val_correct += (prediction == data.y.view(-1, 1)).sum().item()
+                val_correct += (prediction == batch.y.view(-1, 1)).sum().item()
 
-        val_loss = val_epoch_loss / val_len
-        val_acc = val_correct / val_len
+        val_loss = val_epoch_loss / total_val_samples
+        val_acc = val_correct / total_val_samples
 
         print(f"[Epoch {epoch+1}] Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
 
@@ -265,36 +354,37 @@ def train_rgcn(args):
 
 
 def evaluate_rgcn(model, model_path, test_file_path, device, args):
-    """Đánh giá mô hình RGCN trên tập test và ghi kết quả vào test_result.txt"""
+    """Đánh giá mô hình RGCN trên tập test với Mini-Batching và ghi kết quả vào test_result.txt"""
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 
     test_data = load_graph_data(test_file_path)
     test_len = len(test_data['y'])
+    test_dataset = create_pyg_data_list(test_data)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
+
     test_loss = 0.0
     correct_predictions = 0
+    total_test_samples = 0
     test_pres = []
     criterion = nn.BCELoss()
 
     with torch.no_grad():
-        for i in tqdm(range(test_len), desc="Testing RGCN"):
-            data = Data(
-                x=test_data['all_token_embeddings'][i],
-                edge_index=test_data['all_edge_index'][i],
-                edge_type=test_data['all_edge_type'][i],
-                y=test_data['y'][i]
-            ).to(device)
+        for batch in tqdm(test_loader, desc=f"Testing RGCN (Batch={args.batch_size})"):
+            batch = batch.to(device)
 
-            outputs = model(data)
-            test_pres.append(outputs.item())
-            loss = criterion(outputs, data.y.float().view(-1, 1))
-            test_loss += loss.item()
+            outputs = model(batch)
+            bsz = batch.num_graphs if hasattr(batch, 'num_graphs') else batch.y.size(0)
+            total_test_samples += bsz
+            loss = criterion(outputs, batch.y.float().view(-1, 1))
+            test_loss += loss.item() * bsz
 
+            test_pres.extend(outputs.view(-1).cpu().tolist())
             prediction = (outputs >= 0.5).long()
-            correct_predictions += (prediction == data.y.view(-1, 1)).sum().item()
+            correct_predictions += (prediction == batch.y.view(-1, 1)).sum().item()
 
-    test_loss /= test_len
-    test_acc = correct_predictions / test_len
+    test_loss /= total_test_samples
+    test_acc = correct_predictions / total_test_samples
     y_pred = [1 if p >= 0.5 else 0 for p in test_pres]
     y_true = test_data['y'].view(-1, 1).cpu().numpy()
 
@@ -332,6 +422,8 @@ if __name__ == '__main__':
                         help="Tên file đồ thị test trong graph_data/ (mặc định: hc3_test)")
     parser.add_argument('--seed', type=str, default='2024',
                         help="Random seed (mặc định: 2024)")
+    parser.add_argument('--batch_size', type=int, default=32,
+                        help="Kích thước mini-batch (mặc định: 32, tối ưu tốc độ huấn luyện trên GPU)")
     parser.add_argument('--epochs', type=int, default=40,
                         help="Số lượng epoch huấn luyện (mặc định: 40)")
     parser.add_argument('--lr', type=float, default=0.0001,

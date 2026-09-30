@@ -3,8 +3,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 try:
-    from torch_geometric.nn import GCNConv
+    from torch_geometric.nn import GCNConv, global_mean_pool
 except ImportError:
+    def global_mean_pool(x: torch.Tensor, batch: torch.Tensor, size: int = None) -> torch.Tensor:
+        if size is None:
+            size = int(batch.max().item() + 1) if batch.numel() > 0 else 0
+        out = torch.zeros((size, x.size(-1)), device=x.device, dtype=x.dtype)
+        count = torch.zeros((size, 1), device=x.device, dtype=x.dtype)
+        out.index_add_(0, batch, x)
+        count.index_add_(0, batch, torch.ones((batch.size(0), 1), device=x.device, dtype=x.dtype))
+        return out / count.clamp(min=1.0)
+
     class GCNConv(nn.Module):
         """Fallback GCNConv khi môi trường chưa cài PyTorch Geometric"""
         def __init__(self, in_channels, out_channels):
@@ -36,6 +45,7 @@ class GCN2(nn.Module):
         
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
+        batch = getattr(data, 'batch', None)
         x = self.conv1(x, edge_index)
         x = F.relu(x)
         x = self.dropout(x)
@@ -43,5 +53,8 @@ class GCN2(nn.Module):
         x = F.relu(x)
         x = self.dropout(x)
         x = self.fc(x)
-        x = torch.mean(x, dim=0, keepdim=True)  
+        if batch is not None:
+            x = global_mean_pool(x, batch)
+        else:
+            x = torch.mean(x, dim=0, keepdim=True)  
         return torch.sigmoid(x) 
