@@ -165,7 +165,7 @@ def main():
                 if len(text.split()) >= args.min_words:
                     pool.append({
                         "text": text,
-                        "label": 0 if family == "human" else 1,
+                        "label": "human" if family == "human" else "machine",
                         "domain": domain,
                         "model": str(row["model"]),
                         "family": family
@@ -263,9 +263,9 @@ def main():
     print(" KẾT QUẢ TRÍCH XUẤT VÀ TẠO DATASET THÀNH CÔNG:")
     print("=" * 70)
     print(f"1. Tập Train ({train_path}):")
-    print(f"   - Tổng: {len(train_samples)} mẫu | Human: {sum(1 for x in train_samples if x['label']==0)} | AI: {sum(1 for x in train_samples if x['label']==1)}")
+    print(f"   - Tổng: {len(train_samples)} mẫu | Human: {sum(1 for x in train_samples if x['label']=='human')} | AI: {sum(1 for x in train_samples if x['label']!='human')}")
     print(f"2. Tập Valid ({valid_path}):")
-    print(f"   - Tổng: {len(valid_samples)} mẫu | Human: {sum(1 for x in valid_samples if x['label']==0)} | AI: {sum(1 for x in valid_samples if x['label']==1)}")
+    print(f"   - Tổng: {len(valid_samples)} mẫu | Human: {sum(1 for x in valid_samples if x['label']=='human')} | AI: {sum(1 for x in valid_samples if x['label']!='human')}")
     print("3. Các tập Test Domain:")
     for domain, samples in test_domain_samples.items():
         print(f"   - Miền '{domain}': {len(samples)} mẫu (50% Human / 50% AI) -> {os.path.join(args.output_dir, f'{prefix}test_{domain}.json')}")
