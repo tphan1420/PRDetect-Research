@@ -43,8 +43,10 @@ def build_graph(json_texts):
     texts = list()
     y = list()
     for json_text in json_texts:
-        texts.append(json.loads(json_text)['text'])
-        label = 1 if "human" in json.loads(json_text)['label'] else 0
+        data_item = json.loads(json_text)
+        texts.append(data_item['text'])
+        raw_label = str(data_item.get('label', '')).lower()
+        label = 1 if "human" in raw_label else 0
         y.append(label)
     y = torch.tensor(y, dtype=torch.float32)
     tokenized_sentences = list()

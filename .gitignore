@@ -6,5 +6,4 @@ datasets/
 *.pth
 *.jpg
 *.png
-
-
+__pycache__/
