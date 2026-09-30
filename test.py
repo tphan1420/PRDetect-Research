@@ -55,7 +55,8 @@ from dep_vocab import get_default_vocab
 
 parser = argparse.ArgumentParser(description="Kiểm thử mô hình PRDetect (GCN / RGCN)")
 parser.add_argument('--dataset', type=str, default='hc3')
-parser.add_argument('--seed', choices=['2021', '2022', '2023', '2024', '2025'], default='2024')
+parser.add_argument('--seed', type=str, default='2024',
+                    help="Random seed (VD: 2024, 2026)")
 parser.add_argument('--file', dest='test_file', type=str, default='hc3_test')
 parser.add_argument('--model_type', choices=['gcn', 'rgcn'], default='gcn',
                     help="Kiểu mô hình: 'gcn' (mặc định) hoặc 'rgcn' (Mục 3 update.md)")

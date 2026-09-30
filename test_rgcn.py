@@ -164,7 +164,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Kiểm thử mô hình RGCN trên dữ liệu đồ thị")
     parser.add_argument('--dataset', type=str, default='hc3',
                         help="Tên dataset của checkpoint mô hình (mặc định: hc3)")
-    parser.add_argument('--seed', choices=['2021', '2022', '2023', '2024', '2025'], default='2024')
+    parser.add_argument('--seed', type=str, default='2024',
+                        help="Random seed (VD: 2024, 2026)")
     parser.add_argument('--file', dest='test_file', type=str, default='hc3_test',
                         help="Tên file đồ thị cần test trong graph_data/ (mặc định: hc3_test)")
     parser.add_argument('--input_dim', type=int, default=768,

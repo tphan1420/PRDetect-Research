@@ -38,8 +38,8 @@ from dep_vocab import get_default_vocab
 
 parser = argparse.ArgumentParser(description="Dự đoán văn bản Human hay Machine bằng PRDetect (GCN / RGCN)")
 parser.add_argument('--text', type=str, required=True, help="Đoạn văn bản cần kiểm tra")
-parser.add_argument('--dataset', choices=['hc3', 'gpt3.5', 'raid', 'detectrl'], default='hc3')
-parser.add_argument('--seed', choices=['2021', '2022', '2023', '2024', '2025'], default='2024')
+parser.add_argument('--dataset', type=str, default='hc3')
+parser.add_argument('--seed', type=str, default='2024')
 parser.add_argument('--model_type', choices=['rgcn', 'gcn'], default='rgcn',
                     help="Kiểu mô hình suy luận: 'rgcn' (đa quan hệ) hoặc 'gcn' (đồng nhất)")
 
