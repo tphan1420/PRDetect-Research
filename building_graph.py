@@ -164,7 +164,8 @@ def read_json(file_name):
     return texts
 
 def save_pkl(file_name, all_token_embeddings, all_edge_index, y, all_edge_type=None):
-    base_name = os.path.splitext(os.path.basename(file_name))[0]
+    clean_name = file_name[:-5] if file_name.endswith(".json") else file_name
+    base_name = os.path.basename(clean_name)
     os.makedirs("./graph_data", exist_ok=True)
     out_path = f"./graph_data/{base_name}.pkl"
     save_dict = {
@@ -203,10 +204,11 @@ if __name__ == '__main__':
         ]
 
     for file in files:
-        base_name = os.path.splitext(os.path.basename(file))[0]
+        clean_name = file[:-5] if file.endswith(".json") else file
+        base_name = os.path.basename(clean_name)
         print(f"\n[Processing] Đang xử lý xây dựng đồ thị cho: {base_name} ...")
         json_data = read_json(file)
-        print(f"-> Đã đọc {len(json_data)} mẫu văn bản từ original_text/{base_name}.json")
+        print(f"-> Đã đọc {len(json_data)} mẫu văn bản từ file {base_name}")
         all_token_embeddings, all_edge_index, all_edge_type, y = build_graph(
             json_data, return_edge_type=True, bidirectional=args.bidirectional
         )

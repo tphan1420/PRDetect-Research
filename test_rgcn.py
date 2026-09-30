@@ -176,7 +176,9 @@ def test_rgcn(test_file, dataset_name, seed, num_layers=2, num_bases=30,
     model.load_state_dict(torch.load(model_weight_path, map_location=device))
     model.eval()
 
-    graph_file_path = f"./graph_data/{test_file}.pkl"
+    clean_test_file = test_file[:-4] if test_file.endswith(".pkl") else test_file
+    clean_test_file = os.path.basename(clean_test_file)
+    graph_file_path = f"./graph_data/{clean_test_file}.pkl"
     if not os.path.exists(graph_file_path):
         raise FileNotFoundError(f"Không tìm thấy file đồ thị tại: {graph_file_path}")
 

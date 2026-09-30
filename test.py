@@ -186,7 +186,9 @@ def test(test_file, dataset_name, seed, model_type='gcn', batch_size=32):
     model.load_state_dict(torch.load(weight_path, map_location=device))
     model.eval()
 
-    graph_file_path = f"./graph_data/{test_file}.pkl"
+    clean_test_file = test_file[:-4] if test_file.endswith(".pkl") else test_file
+    clean_test_file = os.path.basename(clean_test_file)
+    graph_file_path = f"./graph_data/{clean_test_file}.pkl"
     if not os.path.exists(graph_file_path):
         raise FileNotFoundError(f"Không tìm thấy file đồ thị: {graph_file_path}")
 
