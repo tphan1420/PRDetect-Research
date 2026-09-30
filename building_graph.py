@@ -59,7 +59,11 @@ def build_graph(json_texts, return_edge_type=True, bidirectional=False):
     for json_text in json_texts:
         data = json.loads(json_text)
         texts.append(data['text'])
-        label = 1 if "human" in data.get('label', '') else 0
+        lbl = data.get('label', '')
+        if isinstance(lbl, (int, float)):
+            label = int(lbl)
+        else:
+            label = 1 if "human" in str(lbl).lower() else 0
         y.append(label)
     y = torch.tensor(y, dtype=torch.float32)
 
