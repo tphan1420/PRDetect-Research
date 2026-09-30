@@ -61,10 +61,12 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Trích xuất và cân bằng tập dữ liệu RAID từ Hugging Face Parquet shards."
     )
-    parser.add_argument("--output_dir", type=str, default="data",
-                        help="Thư mục lưu các file train.jsonl, valid.jsonl và test_*.jsonl (mặc định: 'data')")
-    parser.add_argument("--test_dir", type=str, default="test",
-                        help="Thư mục phụ để lưu bản sao các tập test domain (mặc định: 'test')")
+    parser.add_argument("--output_dir", type=str, default="original_text",
+                        help="Thư mục lưu các file train, val và test (mặc định: 'original_text')")
+    parser.add_argument("--prefix", type=str, default="mini_raid_",
+                        help="Tiền tố tên file (mặc định: 'mini_raid_')")
+    parser.add_argument("--test_dir", type=str, default="",
+                        help="Thư mục phụ để lưu bản sao các tập test domain (nếu có)")
     parser.add_argument("--seed", type=int, default=2026,
                         help="Random seed cho tính tái lập (mặc định: 2026)")
     parser.add_argument("--num_train", type=int, default=8000,
@@ -235,17 +237,27 @@ def main():
     random.shuffle(valid_samples)
 
     # Lưu kết quả
-    train_path = os.path.join(args.output_dir, "train.jsonl")
-    valid_path = os.path.join(args.output_dir, "valid.jsonl")
+    prefix = args.prefix
+    train_path = os.path.join(args.output_dir, f"{prefix}train.json")
+    valid_path = os.path.join(args.output_dir, f"{prefix}val.json")
 
     save_jsonl(train_samples, train_path)
     save_jsonl(valid_samples, valid_path)
 
+    all_test_samples = []
     for domain, samples in test_domain_samples.items():
-        domain_test_file = f"test_{domain}.jsonl"
+        domain_test_file = f"{prefix}test_{domain}.json"
         save_jsonl(samples, os.path.join(args.output_dir, domain_test_file))
         if args.test_dir:
             save_jsonl(samples, os.path.join(args.test_dir, domain_test_file))
+        all_test_samples.extend(samples)
+
+    # Tập test gộp toàn bộ các miền
+    random.shuffle(all_test_samples)
+    all_test_file = f"{prefix}test_all.json"
+    save_jsonl(all_test_samples, os.path.join(args.output_dir, all_test_file))
+    if args.test_dir:
+        save_jsonl(all_test_samples, os.path.join(args.test_dir, all_test_file))
 
     print("\n" + "=" * 70)
     print(" KẾT QUẢ TRÍCH XUẤT VÀ TẠO DATASET THÀNH CÔNG:")
@@ -256,7 +268,8 @@ def main():
     print(f"   - Tổng: {len(valid_samples)} mẫu | Human: {sum(1 for x in valid_samples if x['label']==0)} | AI: {sum(1 for x in valid_samples if x['label']==1)}")
     print("3. Các tập Test Domain:")
     for domain, samples in test_domain_samples.items():
-        print(f"   - Miền '{domain}': {len(samples)} mẫu (50% Human / 50% AI) -> {os.path.join(args.output_dir, f'test_{domain}.jsonl')}")
+        print(f"   - Miền '{domain}': {len(samples)} mẫu (50% Human / 50% AI) -> {os.path.join(args.output_dir, f'{prefix}test_{domain}.json')}")
+    print(f"   - Toàn bộ miền (All): {len(all_test_samples)} mẫu -> {os.path.join(args.output_dir, all_test_file)}")
     print("=" * 70)
 
 
