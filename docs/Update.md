@@ -46,10 +46,10 @@ Khác với GCN truyền thống chỉ sử dụng một ma trận trọng số 
 $$
 h_i^{(l+1)}
 = \sigma\left(
-    \sum_{r \in \mathcal{R}}
-    \sum_{j \in \mathcal{N}_i^r}
-    \frac{1}{c_{i,r}} W_r^{(l)} h_j^{(l)}
-    + W_0^{(l)} h_i^{(l)}
+    \sum\limits_{r \in \mathcal{R}}
+    \sum\limits_{j \in \mathcal{N}_i^r}
+    \frac{1}{c_{i,r}}\, W_r^{(l)}\, h_j^{(l)}
+    + W_0^{(l)}\, h_i^{(l)}
 \right)
 $$
 

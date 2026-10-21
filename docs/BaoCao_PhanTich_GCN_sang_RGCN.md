@@ -34,8 +34,14 @@ $$
 ### 1.2. Kiến trúc Đề xuất: Mạng Tích chập Đồ thị Quan hệ (RGCN)
 Nhằm giữ trọn vẹn thông tin ngữ pháp, cây cú pháp được chuyển đổi thành **đồ thị đa quan hệ có hướng** $\mathcal{G} = (\mathcal{V}, \mathcal{E}, \mathcal{R})$. Công thức cập nhật trạng thái ẩn của node $i$ tại tầng $l+1$:
 $$
-h_{i}^{(l+1)} = \sigma\left(\sum_{r\in\mathcal{R}}\sum_{j\in\mathcal{N}_{i}^{r}}\frac{1}{c_{i,r}}W_{r}^{(l)}h_{j}^{(l)} + W_{0}^{(l)}h_{i}^{(l)}\right)
+h_i^{(l+1)} = \sigma\left(
+    \sum\limits_{r \in \mathcal{R}}
+    \sum\limits_{j \in \mathcal{N}_i^r}
+    \frac{1}{c_{i,r}}\, W_r^{(l)}\, h_j^{(l)}
+    + W_0^{(l)}\, h_i^{(l)}
+\right)
 $$
+
 * $\mathcal{R}$: Không gian hơn 60 kiểu quan hệ cú pháp phụ thuộc SpaCy (`nsubj`, `dobj`, `amod`, `prep`, `ROOT`,...).
 * $W_{r}^{(l)}$: Ma trận trọng số biến đổi riêng biệt dành cho quan hệ $r$.
 * $W_{0}^{(l)}$: Trọng số tự lặp (Self-loop) giúp duy trì đặc trưng nội tại của node.

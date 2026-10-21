@@ -46,7 +46,14 @@ To overcome the limitations of homogeneous binary adjacency matrices on complex,
 ### Mathematical Formulation
 The hidden state of node $i$ at layer $l+1$ is updated via relation-specific transformations:
 
-$$h_{i}^{(l+1)} = \sigma\left(\sum_{r\in\mathcal{R}}\sum_{j\in\mathcal{N}_{i}^{r}}\frac{1}{c_{i,r}}W_{r}^{(l)}h_{j}^{(l)} + W_{0}^{(l)}h_{i}^{(l)}\right)$$
+$$
+h_i^{(l+1)} = \sigma\left(
+    \sum\limits_{r \in \mathcal{R}}
+    \sum\limits_{j \in \mathcal{N}_i^r}
+    \frac{1}{c_{i,r}}\, W_r^{(l)}\, h_j^{(l)}
+    + W_0^{(l)}\, h_i^{(l)}
+\right)
+$$
 
 - **$\mathcal{R}$**: Set of **60+ syntactic dependency relations** (`nsubj`, `dobj`, `amod`, `prep`, `compound`, `punct`, `ROOT`, etc.).
 - **$W_{r}^{(l)}$**: Distinct trainable weight matrix dedicated to relation type $r$.

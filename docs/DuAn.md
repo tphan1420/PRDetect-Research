@@ -101,8 +101,14 @@ Nhằm khắc phục nhược điểm của việc san phẳng cây cú pháp th
 - **Biểu diễn đa quan hệ:** Phân biệt hơn 60 loại quan hệ cú pháp phụ thuộc (`nsubj`, `dobj`, `amod`, `prep`, `pobj`, `advmod`, `compound`, `punct`, `ROOT`,...).
 - **Cơ chế cập nhật trạng thái ẩn có trọng số theo quan hệ:**
 $$
-h_{i}^{(l+1)} = \sigma\left(\sum_{r\in\mathcal{R}}\sum_{j\in\mathcal{N}_{i}^{r}}\frac{1}{c_{i,r}}W_{r}^{(l)}h_{j}^{(l)} + W_{0}^{(l)}h_{i}^{(l)}\right)
+h_i^{(l+1)} = \sigma\left(
+    \sum\limits_{r \in \mathcal{R}}
+    \sum\limits_{j \in \mathcal{N}_i^r}
+    \frac{1}{c_{i,r}}\, W_r^{(l)}\, h_j^{(l)}
+    + W_0^{(l)}\, h_i^{(l)}
+\right)
 $$
+
   - $W_r^{(l)}$: Ma trận trọng số đặc thù cho từng loại quan hệ cú pháp $r \in \mathcal{R}$.
   - $W_0^{(l)}$: Ma trận biến đổi tự lặp (root weight) bảo toàn bản sắc của node trung tâm.
   - $c_{i,r}$: Hằng số chuẩn hóa cấu trúc theo bậc quan hệ.

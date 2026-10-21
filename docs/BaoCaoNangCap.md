@@ -29,7 +29,12 @@ Nhằm giữ trọn vẹn thông tin ngữ pháp, đồ thị cú pháp được
 Trạng thái ẩn của node $i$ tại tầng $l+1$ được định nghĩa theo công thức:
 
 $$
-h_{i}^{(l+1)} = \sigma\left(\sum_{r\in\mathcal{R}}\sum_{j\in\mathcal{N}_{i}^{r}}\frac{1}{c_{i,r}}W_{r}^{(l)}h_{j}^{(l)} + W_{0}^{(l)}h_{i}^{(l)}\right)
+h_i^{(l+1)} = \sigma\left(
+    \sum\limits_{r \in \mathcal{R}}
+    \sum\limits_{j \in \mathcal{N}_i^r}
+    \frac{1}{c_{i,r}}\, W_r^{(l)}\, h_j^{(l)}
+    + W_0^{(l)}\, h_i^{(l)}
+\right)
 $$
 
 - $\mathcal{R}$: Không gian gồm **60+ kiểu quan hệ cú pháp phụ thuộc** (`nsubj`, `dobj`, `amod`, `prep`, `compound`, `ROOT`,...).
