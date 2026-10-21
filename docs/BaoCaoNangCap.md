@@ -1,170 +1,318 @@
-# Báo cáo Nâng cấp Kiến trúc Mô hình PRDetect: Chuyển đổi Hình thái Đồ thị và Tích chập Đa Quan hệ (RGCN)
+# BÁO CÁO TỔNG HỢP NÂNG CẤP PRDETECT: TỪ GCN SANG RGCN
 
-> **Mục tiêu:** Hiện thực hóa Mục 3 trong tài liệu `update.md`, giải quyết hiện tượng suy giảm hiệu suất của mô hình PRDetect trên tập benchmark RAID thông qua việc nâng cấp biểu diễn cây cú pháp từ đồ thị đồng nhất sang đồ thị đa quan hệ (Multi-Relational Heterogeneous Graph).
+**Phạm vi:** toàn bộ tài liệu trong `docs/` và log trong `result/`
 
----
+**Đối sánh chính:** `hc3_gcn` và `hc3_rgcn`, huấn luyện trên HC3, seed 2026
 
-## 1. Bối cảnh & Cơ sở Toán học của Sự Cải tiến
-
-### 1.1. Giới hạn của Kiến trúc GCN Đồng nhất Hiện tại
-Trong mô hình PRDetect nguyên bản (Findings of NAACL 2025), cây cú pháp phụ thuộc (Dependency Syntax Tree) được biểu diễn bằng một đồ thị đồng nhất đơn giản với ma trận kề nhị phân $A \in \{0, 1\}^{N \times N}$, trong đó $A_{ij} = 1$ nếu có liên kết phụ thuộc giữa từ $i$ và từ $j$.
-
-Quy tắc lan truyền thông điệp của mạng GCN tiêu chuẩn là:
-
-$$
-H^{(l+1)} = \sigma\left(\tilde{D}^{-\frac{1}{2}}\tilde{A}\tilde{D}^{-\frac{1}{2}}H^{(l)}W^{(l)}\right)
-$$
-
-Trong đó $\tilde{A} = A + I_N$ (đồ thị có self-loop) và $\tilde{D}_{ii} = \sum_j \tilde{A}_{ij}$.
-
-> [!WARNING]
-> **Điểm nghẽn toán học:** GCN truyền thống sử dụng **duy nhất một ma trận trọng số $W^{(l)}$** cho tất cả các cạnh. Điều này san phẳng toàn bộ tính chất ngữ pháp: liên kết giữa động từ và chủ ngữ (`nsubj`) bị đối xử hoàn toàn bình đẳng với liên kết giữa danh từ và mạo từ (`det`) hay dấu câu (`punct`). Khi đối đầu với 11 mô hình LLM và các kỹ thuật giải mã (Sampling, Repetition Penalty) trong tập dữ liệu RAID, mô hình mất đi khả năng nhận diện các dấu vân tay cú pháp đặc thù.
+**Ngày tổng hợp:** 2026-10-21
 
 ---
 
-### 1.2. Kiến trúc Đề xuất: Mạng Tích chập Đồ thị Quan hệ (RGCN)
-Nhằm giữ trọn vẹn thông tin ngữ pháp, đồ thị cú pháp được mô hình hóa thành **đồ thị đa quan hệ có hướng** $\mathcal{G} = (\mathcal{V}, \mathcal{E}, \mathcal{R})$, trong đó mỗi cạnh $(j, r, i) \in \mathcal{E}$ mang nhãn quan hệ cú pháp $r \in \mathcal{R}$.
+## Tóm tắt điều hành
 
-#### A. Công thức cập nhật trạng thái ẩn (Message Passing)
-Trạng thái ẩn của node $i$ tại tầng $l+1$ được định nghĩa theo công thức:
+PRDetect phát hiện văn bản do LLM sinh bằng cách kết hợp embedding RoBERTa với cây cú pháp phụ thuộc. Mô hình cũ dùng GCN đồng nhất nên mọi cạnh cú pháp đều dùng chung một phép biến đổi; nhãn như `nsubj`, `dobj`, `amod`, `compound` hay `punct` bị san phẳng. Mô hình hiện tại thay GCN bằng RGCN, giữ hướng và hơn 60 loại quan hệ, đồng thời dùng phân rã cơ sở với $B=30$ để kiểm soát số tham số.
 
-$$
-h_i^{(l+1)} = \sigma\left(
-    \sum\limits_{r \in \mathcal{R}}
-    \sum\limits_{j \in \mathcal{N}_i^r}
-    \frac{1}{c_{i,r}}\, W_r^{(l)}\, h_j^{(l)}
-    + W_0^{(l)}\, h_i^{(l)}
-\right)
-$$
+Đối chiếu trực tiếp `result/RGCN_test_result.txt` cho thấy 242 dòng hợp lệ tạo thành **120 tập kiểm thử duy nhất**. Log ghi “121 file” do `llama2_gen` xuất hiện hai lần. Theo Accuracy, RGCN tăng trên **105/120 tập (87,5%)**, giảm trên **13/120 (10,83%)** và hòa trên **2/120 (1,67%)**. Mức tăng lớn nhất là **+12,90 điểm phần trăm** ở `hc3_test_insert_50`.
 
-- $\mathcal{R}$: Không gian gồm **60+ kiểu quan hệ cú pháp phụ thuộc** (`nsubj`, `dobj`, `amod`, `prep`, `compound`, `ROOT`,...).
-- $\mathcal{N}_{i}^{r} = \{j \in \mathcal{V} \mid (j, i) \in \mathcal{E}_{r}\}$: Tập hợp các node lân cận nối tới node $i$ thông qua quan hệ $r$.
-- $W_{r}^{(l)} \in \mathbb{R}^{d_{l+1} \times d_l}$: Ma trận trọng số biến đổi riêng biệt dành cho quan hệ $r$.
-- $W_{0}^{(l)} \in \mathbb{R}^{d_{l+1} \times d_l}$: Trọng số tự lặp riêng biệt (Root / Self-loop weight), giúp duy trì biểu diễn nội tại của node trung tâm $i$.
-- $c_{i,r}$: Hằng số chuẩn hóa cấu trúc theo bậc vào của quan hệ:
-$$
-c_{i,r} = |\mathcal{N}_{i}^{r}|
-$$
-  giúp triệt tiêu hiện tượng mất cân bằng gradient khi một số quan hệ xuất hiện với tần suất quá cao.
+Các kết quả nổi bật gồm HC3 **97,40% → 98,60%**, GPT-3.5-Mixed **64,90% → 72,60%**, dịch ngược GPT-3.5-Mixed **65,00% → 77,20%**, và HC3 50–100 token **88,33% → 98,33%**. Tuy nhiên, RGCN vẫn giảm trên một số tập matched, văn bản rất ngắn, nhiễu xóa/lặp cực đoan; trên LLaMA/Mistral, Accuracy tăng nhưng AUC có thể giảm.
+
+Kết luận: RGCN sửa đúng điểm yếu biểu diễn của GCN và tạo cải thiện rộng, nhưng kết quả hiện tại mới là một lần chạy seed 2026, chưa có khoảng tin cậy, kiểm định thống kê, calibration hoặc benchmark chi phí GCN–RGCN cùng điều kiện.
 
 ---
 
-### 1.3. Điều chuẩn Toán học: Phân rã Cơ sở (Basis-Decomposition)
+## 1. Mô hình cũ và các hạn chế
 
-Nếu phân bổ ma trận độc lập $W_r$ cho từng quan hệ, số lượng tham số cần tối ưu ở mỗi tầng là:
+### 1.1. Pipeline PRDetect-GCN
+
+1. SpaCy phân tích văn bản thành cây cú pháp phụ thuộc.
+2. RoBERTa-base sinh véc-tơ 768 chiều cho token/nút.
+3. Cây được chuyển thành ma trận kề nhị phân $A$.
+4. GCN hai tầng lan truyền đặc trưng.
+5. Global mean pooling tạo biểu diễn toàn văn bản.
+6. Lớp tuyến tính và sigmoid dự đoán Human/AI; quy ước dự án là $y=1$ cho Human, $y=0$ cho AI.
+
+Phép cập nhật GCN:
 
 $$
-\text{Params}_{\text{full}} = |\mathcal{R}| \times d_l \times d_{l+1}
+H^{(l+1)}=\sigma\left(\widetilde D^{-\frac12}\widetilde A\widetilde D^{-\frac12}H^{(l)}W^{(l)}\right),
 $$
 
-Với $|\mathcal{R}| \approx 60$, $d_l = 768$, $d_{l+1} = 256$, một tầng tích chập đòi hỏi tới **$\sim 11.8$ triệu tham số**, tiềm ẩn rủi ro quá khớp (overfitting) rất lớn.
+với $\widetilde A=A+I$, $\widetilde D$ là ma trận bậc và $W^{(l)}$ là trọng số dùng chung cho mọi cạnh.
 
-Để giải quyết vấn đề này, cơ chế **Phân rã cơ sở (Basis-Decomposition)** được áp dụng: Mỗi ma trận $W_r^{(l)}$ được phân rã thành tổ hợp tuyến tính của $B$ ma trận cơ sở dùng chung $V_b^{(l)}$:
+### 1.2. Điểm mạnh vốn có
 
-$$
-W_{r}^{(l)} = \sum_{b=1}^{B} a_{rb}^{(l)} V_{b}^{(l)}
-$$
+- Khai thác cấu trúc cú pháp thay vì chỉ dựa vào xác suất token bề mặt.
+- Kết hợp ngữ nghĩa RoBERTa với topology của cây phụ thuộc.
+- Có tính giải thích qua cấu trúc cây và liên kết giữa các token.
+- Tài liệu gốc báo cáo PRDetect kiểm thử trong 2,5 giây trên RTX 4090, so với 28,3 giây của CoCo và 1.298,4 giây của DetectGPT trong thiết lập tương ứng.
+- PRDetect nguyên bản bền với thay từ đồng nghĩa; đây là kết quả của toàn hệ thống PRDetect, không phải bằng chứng riêng cho RGCN.
 
-- $V_{b}^{(l)} \in \mathbb{R}^{d_{l+1} \times d_l}$: Các ma trận cơ sở độc lập được chia sẻ giữa tất cả các quan hệ.
-- $a_{rb}^{(l)} \in \mathbb{R}$: Hệ số chú ý/trọng số kết hợp của quan hệ $r$ trên cơ sở thứ $b$.
-- Số lượng tham số giảm xuống chỉ còn:
-$$
-\text{Params}_{\text{basis}} = B \times d_l \times d_{l+1} + |\mathcal{R}| \times B
-$$
-  Với $B = 30$, lượng tham số **giảm gần 50%**, đồng thời ép các quan hệ ngữ pháp có tính chất tương đồng (như nhóm bổ nghĩa `amod`, `advmod`, `npadvmod`) chia sẻ tri thức biểu diễn, giúp mô hình tổng quát hóa vượt trội trên các miền văn bản mới.
+### 1.3. Hạn chế của GCN cũ
+
+**Mất thông tin quan hệ.** Ma trận $A$ chỉ biểu diễn có/không có cạnh. Quan hệ chủ ngữ, tân ngữ, bổ ngữ và dấu câu đều dùng cùng $W^{(l)}$.
+
+**Tổng hợp tĩnh.** Chuẩn hóa theo bậc không đánh giá độ tin cậy của từng láng giềng; cạnh sai do typo, homoglyph, whitespace hoặc parser vẫn truyền nhiễu.
+
+**Tầm nhìn cục bộ.** Hai tầng chỉ bao phủ vùng hai bước nhảy. Tăng độ sâu trực tiếp lại gây over-smoothing.
+
+**Phụ thuộc parser và miền.** Sai số tokenization/parsing truyền vào đồ thị; mô hình huấn luyện trên HC3 dễ suy giảm ở miền, LLM hoặc chiến lược giải mã mới.
+
+**Yếu ở văn bản ngắn.** Đồ thị nhỏ chứa ít tín hiệu. RGCN mới cải thiện mạnh HC3 50–100 token, nhưng GPT-3.5 10–100 token vẫn gần mức ngẫu nhiên.
+
+**Ngưỡng quyết định cố định.** Accuracy/F1 có thể giảm khi phân phối logit dịch chuyển, dù AUC còn tốt.
 
 ---
 
-## 2. Bảng Tổng hợp các Thành phần Đã Triển khai
+## 2. Các cải tiến đã triển khai
 
-| STT | Thành phần / File | Vai trò & Đóng góp Kỹ thuật |
-| :---: | :--- | :--- |
-| 1 | [`dep_vocab.py`](../dep_vocab.py) & [`dep_vocab.json`](../dep_vocab.json) | Xây dựng bảng tra cứu chuẩn hóa 60+ quan hệ cú pháp phụ thuộc của SpaCy; hỗ trợ mã hóa/giải mã nhất quán xuyên suốt pipeline. |
-| 2 | [`building_graph.py`](../building_graph.py) | Nâng cấp hàm `build_graph()` để trích xuất cả liên kết cạnh và nhãn `edge_type`; hỗ trợ tùy chọn cạnh đảo hai chiều (`--bidirectional`); tự động lưu trữ tensor đa quan hệ vào `.pkl`. |
-| 3 | [`model/RGCN.py`](../model/RGCN.py) | Định nghĩa các lớp mạng `RGCN2` (2 tầng), `RGCN4` (4 tầng), và `RelationalGCN` (tùy biến số tầng, pooling). Tích hợp sẵn cơ chế fallback thuần PyTorch nếu môi trường chưa cài PyG. |
-| 4 | [`rgcn.py`](../rgcn.py) | Script huấn luyện RGCN chuyên dụng; hỗ trợ Early Stopping, ghi log TensorBoard, lưu checkpoint tốt nhất và tự động đánh giá tập kiểm thử. |
-| 5 | [`test_rgcn.py`](../test_rgcn.py) & [`test.py`](../test.py) | Công cụ đánh giá hiệu năng mô hình với các chỉ số Accuracy, ROC-AUC, F1-score; `test.py` hỗ trợ cờ thống nhất `--model_type {gcn, rgcn}`. |
-| 6 | [`detect.py`](../detect.py) | Công cụ suy luận CLI phân loại văn bản tùy ý bằng RGCN hoặc GCN; khắc phục lỗi cấu trúc JSON đầu vào trong bản cũ. |
-| 7 | [`README.md`](../README.md) & [`DuAn.md`](./DuAn.md) | Cập nhật toàn diện tài liệu kỹ thuật, sơ đồ kiến trúc và hướng dẫn thực thi theo chuẩn nghiên cứu khoa học. |
+### 2.1. Đồ thị đa quan hệ có hướng
 
----
+Đồ thị mới là:
 
-## 3. Lệnh Thực thi Nhanh (Cheatsheet)
+$$\mathcal G=(\mathcal V,\mathcal E,\mathcal R),$$
 
-```bash
-# 1. Trích xuất đồ thị đa quan hệ (kèm nhãn edge_type)
-python building_graph.py --file raid_mistral_test
+trong đó $\mathcal V$ là các token, $\mathcal E$ chứa cạnh có hướng $(j,r,i)$ và $\mathcal R$ gồm hơn 60 nhãn phụ thuộc SpaCy. So với ma trận nhị phân, biểu diễn mới giữ đầu–cuối, hướng và loại quan hệ.
 
-# 2. Huấn luyện mô hình RGCN (2 tầng, basis decomposition B=30)
-python rgcn.py --dataset hc3 --seed 2024 --epochs 40 --lr 0.0001 --num_layers 2 --num_bases 30
+### 2.2. RGCN
 
-# 3. Kiểm thử đánh giá hiệu năng RGCN
-python test_rgcn.py --file raid_mistral_test --dataset hc3 --seed 2024 -s
+Trạng thái nút $i$ được cập nhật bởi:
 
-# 4. Suy luận trực tiếp trên đoạn văn bản mới
-python detect.py --text "Artificial intelligence has fundamentally changed modern text analysis." --dataset hc3 --seed 2024 --model_type rgcn
-```
+$$
+h_i^{(l+1)}=\sigma\left(
+\sum_{r\in\mathcal R}\sum_{j\in\mathcal N_i^r}
+\frac{1}{c_{i,r}}W_r^{(l)}h_j^{(l)}
++W_0^{(l)}h_i^{(l)}
+\right).
+$$
 
----
+| Ký hiệu | Ý nghĩa |
+|---|---|
+| $h_i^{(l)}\in\mathbb R^{d_l}$ | Biểu diễn nút $i$ ở tầng $l$ |
+| $\mathcal R$ | Tập loại quan hệ cú pháp |
+| $\mathcal N_i^r$ | Láng giềng gửi thông điệp đến $i$ qua quan hệ $r$ |
+| $W_r^{(l)}$ | Phép biến đổi riêng cho quan hệ $r$ |
+| $W_0^{(l)}$ | Phép biến đổi self-loop/root |
+| $c_{i,r}=|\mathcal N_i^r|$ | Chuẩn hóa theo số láng giềng thuộc quan hệ $r$ |
+| $\sigma$ | Hàm kích hoạt phi tuyến |
 
-## 4. Quản lý Phiên bản trên Git
+Khác biệt cốt lõi là $W^{(l)}$ duy nhất của GCN được thay bằng họ $\{W_r^{(l)}\}$, cho phép mô hình học tác động riêng của từng quan hệ.
 
-- **Nhánh phát triển:** `feat/rgcn-multi-relational`
-- **Mã Commit tích hợp:** `16e7d13`
-- **Tình trạng kiểm thử:** Đã vượt qua toàn bộ các bài kiểm tra tích hợp (End-to-End Test) từ khâu nạp dữ liệu, xây dựng đồ thị cú pháp, tối ưu gradient mini-batching, lưu checkpoint tối ưu (`Val Acc = 98.70%`) đến suy luận kiểm thử chéo tập dữ liệu.
+### 2.3. Phân rã cơ sở
 
----
+Nếu mỗi quan hệ có ma trận độc lập:
 
-## 5. Kết quả Thực nghiệm & Đối sánh Hiệu năng (GCN Baseline vs. RGCN)
+$$P_{\mathrm{full}}=|\mathcal R|d_ld_{l+1}.$$
 
-Quá trình thực nghiệm được triển khai đồng bộ trên GPU NVIDIA T4 (môi trường Kaggle) với cùng điều kiện huấn luyện chuẩn hóa trên tập **HC3 gốc** (`hc3_train`, `hc3_val`, `seed = 2026`, `batch_size = 32`, `optimizer = Adam(lr=1e-4)`).
+Với $|\mathcal R|\approx60$, $d_l=768$, $d_{l+1}=256$, một tầng cần khoảng **11,80 triệu** tham số quan hệ. RGCN dùng:
 
-### 5.1. Bảng Tổng hợp Kết quả Đánh giá Toàn diện Đa Tập dữ liệu (8 Benchmarks)
+$$W_r^{(l)}=\sum_{b=1}^{B}a_{rb}^{(l)}V_b^{(l)},$$
 
-| STT | Tập Dữ liệu Kiểm thử (Test Dataset) | Phân loại & Đặc trưng | GCN Acc (%) | RGCN Acc (%) | $\Delta$ Acc (%) | GCN AUC | RGCN AUC | $\Delta$ AUC | GCN F1 | RGCN F1 | $\Delta$ F1 |
-| :-: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| 1 | **`hc3_test`** | In-Domain (Q&A Benchmark) | 97.40 | **98.60** | **+1.20** | 0.9960 | **0.9979** | **+0.0019** | 0.9746 | **0.9861** | **+0.0115** |
-| 2 | **`gpt3.5_mixed_test_split`** | Domain Shift (Văn bản dài / Hybrid) | 64.90 | **72.60** | **+7.70** | 0.8614 | **0.8782** | **+0.0168** | 0.7347 | **0.7794** | **+0.0447** |
-| 3 | **`mini_raid_test_all`** | Out-of-Domain (RAID Tổng hợp 3 miền) | 68.59 | **70.39** | **+1.80** | 0.7176 | **0.7310** | **+0.0134** | 0.7375 | **0.7475** | **+0.0100** |
-| 4 | **`mini_raid_test_news`** | Out-of-Domain (RAID Miền Tin tức) | 67.27 | **68.57** | **+1.30** | 0.7093 | **0.7148** | **+0.0055** | 0.7483 | **0.7562** | **+0.0079** |
-| 5 | **`mini_raid_test_abstracts`** | Out-of-Domain (RAID Tóm tắt khoa học) | **70.47** | 70.37 | -0.10 | 0.6596 | **0.6709** | **+0.0113** | **0.7607** | 0.7574 | -0.0033 |
-| 6 | **`raid_llama_greedy_test`** | Out-of-Domain (LLaMA - Greedy Decoding) | 74.40 | **76.80** | **+2.40** | **0.8875** | 0.8617 | -0.0258 | 0.7836 | **0.7945** | **+0.0109** |
-| 7 | **`raid_llama_sampling_test`** | Out-of-Domain (LLaMA - Sampling Decoding) | 73.05 | **74.50** | **+1.45** | **0.8743** | 0.8491 | -0.0252 | 0.7748 | **0.7786** | **+0.0038** |
-| 8 | **`raid_mistral_test`** | Out-of-Domain (Mistral 7B Benchmark) | 78.10 | **78.40** | **+0.30** | **0.9080** | 0.8788 | -0.0292 | **0.8089** | 0.8059 | -0.0030 |
+$$P_{\mathrm{basis}}=Bd_ld_{l+1}+|\mathcal R|B.$$
 
----
+Với $B=30$, ví dụ trên còn khoảng **5,90 triệu**, giảm gần 50%. $V_b$ là cơ sở dùng chung và $a_{rb}$ là hệ số kết hợp. Tác dụng chống overfit là giả thuyết hợp lý nhưng vẫn cần ablation theo $B$.
 
-### 5.2. Phân tích Chuyên sâu & Phát hiện Khoa học
+### 2.4. Thành phần phần mềm được tài liệu ghi nhận
 
-#### A. Đột phá Ngoạn mục trên Dữ liệu Hỗn hợp & Văn bản Dài (`gpt3.5_mixed` +7.70% Acc, +4.47% F1)
-* Tập `gpt3.5_mixed_test_split` đại diện cho các văn bản bài báo, phóng sự điều tra và bài luận chuyên sâu có độ dài từ 500 – 1.000 từ. 
-* GCN thuần bị suy thoái do làm phẳng toàn bộ cây phụ thuộc dài thành một ma trận trọng số $W$ duy nhất. Ngược lại, **RGCN với cơ chế Phân rã Cơ sở (Basis Decomposition)** điều hướng thông tin theo từng nhãn quan hệ cụ thể (`nsubj`, `dobj`, `advcl`, `prep`,...), giúp:
-  * **Accuracy tăng vọt +7.70%** (từ $64.90\%$ lên **$72.60\%$**).
-  * **F1-Score tăng mạnh +0.0447** (từ $0.7347$ lên **$0.7794$**).
-  * **ROC-AUC tăng đồng bộ +0.0168** (đạt **$0.8782$**).
-  Đây là minh chứng thuyết phục nhất cho việc RGCN giải quyết triệt để điểm yếu của GCN trên các văn bản có cấu trúc cú pháp phức hợp nhiều tầng.
+| Thành phần | Vai trò |
+|---|---|
+| `dep_vocab.py`, `dep_vocab.json` | Ánh xạ nhãn phụ thuộc sang ID |
+| `building_graph.py` | Sinh cạnh và `edge_type`, hỗ trợ cạnh hai chiều |
+| `model/RGCN.py` | RGCN hai tầng, bốn tầng và cấu hình linh hoạt |
+| `rgcn.py` | Huấn luyện, early stopping, TensorBoard, checkpoint |
+| `test_rgcn.py`, `test.py` | Đánh giá Accuracy, ROC-AUC, F1 |
+| `detect.py` | Suy luận CLI bằng GCN hoặc RGCN |
 
-#### B. Khẳng định Đỉnh cao trên Miền Dữ liệu Chuẩn `hc3_test` (98.60% Acc, 0.9979 AUC)
-* Trên tập kiểm thử gốc HC3 (In-Domain), RGCN nâng độ chính xác từ $97.40\%$ lên mức **$98.60\%$** ($+1.20\%$), ROC-AUC đạt mức tiệm cận tuyệt đối **$0.9979$**, và F1 đạt **$0.9861$**.
-* Điều này khẳng định nâng cấp RGCN không chỉ giúp mô hình tổng quát hóa tốt hơn mà còn tối ưu hóa độ nhạy và tính chuẩn xác của bộ phát hiện trên miền dữ liệu mục tiêu.
-
-#### C. Tính Bền vững và Ổn định trên các Tập Cào từ RAID (`mini_raid_*`)
-* Sau khi chuẩn hóa đúng quy ước nhãn văn bản, cả 3 tập con cào từ benchmark RAID đều thể hiện độ chính xác cao và ổn định vững chắc:
-  * **`mini_raid_test_all` (Tập tổng hợp 3 miền):** RGCN vượt GCN toàn diện với **$+1.80\%$ Acc** (đạt $70.39\%$), **$+0.0134$ AUC** (đạt $0.7310$) và **$+0.0100$ F1** (đạt $0.7475$).
-  * **`mini_raid_test_news` (Miền tin tức):** RGCN vượt GCN **$+1.30\%$ Acc** (đạt $68.57\%$), **$+0.0055$ AUC** (đạt $0.7148$) và **$+0.0079$ F1** (đạt $0.7562$).
-  * **`mini_raid_test_abstracts` (Miền tóm tắt khoa học):** Độ chính xác duy trì ngang bằng ở mức cao ($\sim 70.4\%$), đồng thời ROC-AUC của RGCN cao hơn GCN **$+0.0113$** (đạt $0.6709$).
-* Kết quả này chứng minh tính ổn định của mô hình khi chuyển đổi chéo miền văn bản (Cross-Domain Generalization) từ hỏi đáp hội thoại (HC3) sang tin tức và văn học (RAID).
-
-#### D. Khả năng Tổng quát hóa trên các Kiến trúc LLM Mới (LLaMA & Mistral)
-* Trên các tập dữ liệu RAID sinh bởi mô hình mã nguồn mở hiện đại:
-  * Với mô hình **LLaMA**: Cả hai kỹ thuật giải mã Greedy (sinh tất định) và Sampling (sinh ngẫu nhiên) đều ghi nhận RGCN vượt GCN lần lượt **$+2.40\%$ Acc** (đạt $76.80\%$) và **$+1.45\%$ Acc** (đạt $74.50\%$).
-  * Với mô hình **Mistral 7B**: RGCN tiếp tục duy trì ưu thế với độ chính xác cao nhất trong nhóm OOD: **$78.40\%$ Acc** và F1 đạt **$0.8059$**.
-* Điều này khẳng định các dấu vân tay cú pháp đa quan hệ mà RGCN khai thác có tính bền vững cao trước sự biến thiên của các thuật toán giải mã và kiến trúc LLM khác nhau.
+Đây là trạng thái được mô tả trong tài liệu; báo cáo không thay thế kiểm toán mã nguồn từng hàm.
 
 ---
 
-### 5.3. Kết luận Đóng góp Tổng thể của Đề tài
+## 3. Thiết lập và cách đọc kết quả
 
-1. **Hiện thực hóa thành công trọn vẹn Mục 3 trong `update.md`:** Chuyển đổi thành công biểu diễn cây cú pháp từ đồ thị đồng nhất sang đồ thị đa quan hệ có hướng với cơ chế tích chập RGCN và phân rã cơ sở.
-2. **Minh chứng thực nghiệm vững chắc trên 8 tập dữ liệu:** RGCN vượt trội GCN Baseline trên 7/8 tập về Accuracy (với mức cải thiện lên tới $+7.70\%$) và giữ ưu thế áp đảo về F1-score trên hầu hết các kịch bản kiểm thử.
-3. **Giá trị học thuật và ứng dụng:** Công trình cung cấp một phương pháp phát hiện văn bản AI có khả năng giải thích cấu trúc (structural interpretability), vượt qua các giới hạn phụ thuộc từ vựng bề mặt của các phương pháp tiền nhiệm.
+So sánh chính trong `RGCN_test_result.txt` dùng HC3, seed 2026 và hai checkpoint `hc3_gcn`/`hc3_rgcn`. Tài liệu mô tả batch size 32, Adam, learning rate $10^{-4}$ và tối đa 40 epoch.
+
+$$\mathrm{Accuracy}=\frac{TP+TN}{TP+TN+FP+FN}$$
+
+$$\mathrm{Precision}=\frac{TP}{TP+FP},\quad \mathrm{Recall}=\frac{TP}{TP+FN}$$
+
+$$F_1=2\frac{\mathrm{Precision}\cdot\mathrm{Recall}}{\mathrm{Precision}+\mathrm{Recall}}.$$
+
+ROC-AUC đo năng lực xếp hạng qua mọi ngưỡng. Do đó Accuracy tăng nhưng AUC giảm nghĩa là điểm vận hành hiện tại tốt hơn, không đồng nghĩa chất lượng xếp hạng tổng thể tốt hơn.
+
+`result/test_result.txt` chứa các lần chạy lịch sử 2024–2025 với nhiều seed, checkpoint và cấu hình. Nó chỉ dùng để đối chiếu bối cảnh, không ghép vào bảng chính vì không bảo đảm cùng điều kiện.
+
+---
+
+## 4. Kết quả tổng hợp trên 120 tập
+
+### 4.1. Toàn cục
+
+| Theo Accuracy | Số tập | Tỷ lệ |
+|---|---:|---:|
+| RGCN tăng | 105 | 87,50% |
+| RGCN giảm | 13 | 10,83% |
+| Không đổi | 2 | 1,67% |
+| **Tổng** | **120** | **100%** |
+
+### 4.2. Benchmark đại diện
+
+| Tập | GCN Acc | RGCN Acc | $\Delta$ | GCN AUC | RGCN AUC | GCN F1 | RGCN F1 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `hc3_test` | 97,40% | **98,60%** | **+1,20** | 0,9960 | **0,9979** | 0,9746 | **0,9861** |
+| `gpt3.5_mixed_test_split` | 64,90% | **72,60%** | **+7,70** | 0,8614 | **0,8782** | 0,7347 | **0,7794** |
+| `mini_raid_test_all` | 68,59% | **70,39%** | **+1,80** | 0,7176 | **0,7310** | 0,7375 | **0,7475** |
+| `mini_raid_test_news` | 67,27% | **68,57%** | **+1,30** | 0,7093 | **0,7148** | 0,7483 | **0,7562** |
+| `mini_raid_test_abstracts` | **70,47%** | 70,37% | -0,10 | 0,6596 | **0,6709** | **0,7607** | 0,7574 |
+| `raid_llama_greedy_test` | 74,40% | **76,80%** | **+2,40** | **0,8875** | 0,8617 | 0,7836 | **0,7945** |
+| `raid_llama_sampling_test` | 73,05% | **74,50%** | **+1,45** | **0,8743** | 0,8491 | 0,7748 | **0,7786** |
+| `raid_mistral_test` | 78,10% | **78,40%** | **+0,30** | **0,9080** | 0,8788 | **0,8089** | 0,8059 |
+
+RGCN nổi bật nhất trên GPT-3.5-Mixed. Trên RAID/LLaMA/Mistral, Accuracy thường tăng nhưng AUC giảm 0,025–0,029 ở ba tập LLaMA/Mistral; không thể kết luận mô hình vượt GCN trên mọi chỉ số.
+
+### 4.3. Mười mức tăng Accuracy lớn nhất
+
+| Tập | GCN | RGCN | $\Delta$ điểm % |
+|---|---:|---:|---:|
+| `hc3_test_insert_50` | 64,60% | 77,50% | **+12,90** |
+| `gpt3.5_mixed_test_translate` | 65,00% | 77,20% | **+12,20** |
+| `hc3_test_replace_25` | 67,80% | 78,80% | **+11,00** |
+| `hc3_test_50_100` | 88,33% | 98,33% | **+10,00** |
+| `hc3_test_insert_30` | 78,90% | 88,80% | **+9,90** |
+| `hc3_test_replace_30` | 61,90% | 71,50% | **+9,60** |
+| `hc3_test_insert_70` | 60,00% | 69,00% | **+9,00** |
+| `hc3_test_replace_15` | 82,60% | 91,30% | **+8,70** |
+| `gpt3.5_mixed_test_adj_10` | 61,40% | 70,10% | **+8,70** |
+| `hc3_test_insert_25` | 83,30% | 91,70% | **+8,40** |
+
+Xu hướng: RGCN hưởng lợi khi token bị thay đổi nhưng đồ thị vẫn còn đủ quan hệ cú pháp hữu ích.
+
+### 4.4. Theo độ dài
+
+| HC3 | GCN Acc | RGCN Acc | $\Delta$ |
+|---|---:|---:|---:|
+| 50–100 | 88,33% | **98,33%** | **+10,00** |
+| 100–150 | 97,00% | **98,00%** | **+1,00** |
+| 150–200 | **98,75%** | 95,00% | **-3,75** |
+| 200–250 | 96,67% | **98,33%** | **+1,66** |
+| 250–300 | 98,00% | **100,00%** | **+2,00** |
+| >300 | 96,15% | **100,00%** | **+3,85** |
+
+Ngoại lệ 150–200 token giảm 3,75 điểm dù AUC RGCN đạt 1,0, có thể do ngưỡng hoặc tập con nhỏ; cần số mẫu và nhiều seed để xác nhận.
+
+Trên GPT-3.5-Mixed rất ngắn, RGCN chỉ đạt 50,00%, 51,00%, 55,50%, 53,50% và 55,00% ở các khoảng 10–20, 20–40, 40–60, 60–80, 80–100 token. Cải thiện trên HC3 ngắn không khái quát ngay sang miền khác.
+
+### 4.5. Kháng nhiễu và viết lại
+
+| Kịch bản HC3 | GCN Acc | RGCN Acc | $\Delta$ | RGCN F1 |
+|---|---:|---:|---:|---:|
+| Đồng nghĩa 30% | 96,60% | **98,60%** | **+2,00** | 0,9862 |
+| Chèn 15% | 90,00% | **96,60%** | **+6,60** | 0,9674 |
+| Chèn 25% | 83,30% | **91,70%** | **+8,40** | 0,9241 |
+| Xóa 15% | 83,20% | **90,10%** | **+6,90** | 0,9107 |
+| Xóa 25% | 68,40% | **74,00%** | **+5,60** | 0,7956 |
+| Thay thế 15% | 82,60% | **91,30%** | **+8,70** | 0,9208 |
+| Thay thế 25% | 67,80% | **78,80%** | **+11,00** | 0,8268 |
+| Lặp 15% | 95,70% | **98,60%** | **+2,90** | 0,9863 |
+| Dịch ngược | 76,60% | **84,80%** | **+8,20** | 0,8671 |
+| LLaMA-3 8B viết lại | 87,98% | **91,98%** | **+4,00** | 0,9254 |
+
+Với xóa 70–75%, cả hai mô hình chỉ đạt 50,60%; với lặp 75%, RGCN là 86,50% so với GCN 87,70%. RGCN bền hơn ở nhiễu vừa phải nhưng không thể phục hồi khi cấu trúc bị phá hủy gần hoàn toàn.
+
+### 4.6. Các mức giảm đáng chú ý
+
+| Tập | GCN | RGCN | $\Delta$ điểm % |
+|---|---:|---:|---:|
+| `matched_gpt3.5_mixed_test_adj_5_synonym_replace` | 64,70% | 59,70% | **-5,00** |
+| `matched_gpt3.5_mixed_test_split` | 79,90% | 75,00% | **-4,90** |
+| `hc3_test_150_200` | 98,75% | 95,00% | **-3,75** |
+| `hc3_test_repeat_75` | 87,70% | 86,50% | -1,20 |
+| `hc3human` | 97,92% | 96,84% | -1,08 |
+| `gpt3.5_mixed_test_20_40` | 52,00% | 51,00% | -1,00 |
+
+`matched_gpt3.5_mixed_test_split` có AUC tăng 0,8914 → 0,8968 nhưng Accuracy giảm, phù hợp với lệch ngưỡng. Ở tập matched synonym 5%, cả AUC lẫn Accuracy giảm, nên calibration không chắc giải quyết toàn bộ.
+
+---
+
+## 5. Điểm mạnh của mô hình hiện tại
+
+1. **Biểu diễn đúng bản chất dữ liệu hơn:** giữ loại và hướng quan hệ cú pháp.
+2. **Cải thiện rộng:** 105/120 tập tăng Accuracy, bao phủ in-domain, domain shift, nhiều LLM và nhiều phép nhiễu.
+3. **Bền khi cấu trúc còn bảo toàn:** tăng mạnh với chèn, thay thế, đồng nghĩa, dịch ngược và viết lại.
+4. **Khắc phục một phần văn bản ngắn:** HC3 50–100 token tăng 10 điểm phần trăm.
+5. **Kiểm soát tham số:** basis decomposition giảm gần một nửa tham số quan hệ trong cấu hình minh họa.
+6. **Giữ tính giải thích:** có thể truy về loại cạnh thay vì chỉ embedding chuỗi.
+7. **Tương thích pipeline cũ:** encoder, pooling và classifier được giữ, giúp cô lập thay đổi graph encoder.
+
+---
+
+## 6. Điểm yếu và hạn chế hiện tại
+
+1. **Chỉ một seed trong phép so sánh chính:** chưa có mean ± std, confidence interval hay kiểm định paired.
+2. **AUC/F1 không luôn tăng:** LLaMA/Mistral cho thấy đánh đổi giữa Accuracy tại ngưỡng hiện tại và năng lực xếp hạng.
+3. **Giảm trên tập matched:** mô hình chưa hoàn toàn bất biến theo miền/cách chọn mẫu.
+4. **Văn bản GPT-3.5 rất ngắn vẫn yếu:** Accuracy khoảng 50–55,5%.
+5. **Không bền trước phá hủy cực đoan:** xóa 70–75% làm Accuracy gần ngẫu nhiên.
+6. **Phụ thuộc SpaCy:** lỗi parse làm sai cả cạnh lẫn `edge_type`; khả năng đa ngôn ngữ chưa được chứng minh.
+7. **Chưa benchmark chi phí riêng:** RGCN phải lưu `edge_type` và biến đổi theo quan hệ. Số 2.545,3 giây trong `DuAn.md` thuộc CoCo, không phải RGCN; không được dùng để kết luận chi phí RGCN.
+8. **$B=30$ chưa có ablation:** chưa biết cấu hình này tối ưu hay mức tăng đến từ nhãn cạnh hay số tham số.
+9. **Hai tầng vẫn có tầm nhìn hạn chế:** tăng tầng có rủi ro over-smoothing; GraphNorm/Dirichlet Energy mới là đề xuất.
+10. **Thiếu chỉ số vận hành an toàn:** chưa có confusion matrix, calibration error, TPR@1%FPR hay TPR@5%FPR; false positive trên văn bản người là rủi ro quan trọng.
+11. **Một số tập chỉ có một lớp:** AUC=`nan`, F1=0 ở `gpt2`, `hc3chatgpt`, `llama2_gen`; Accuracy đơn lẻ có thể gây hiểu nhầm.
+12. **Log lịch sử không đồng nhất:** `test_result.txt` trộn nhiều thời điểm, seed và checkpoint, không thể so sánh trực tiếp.
+
+---
+
+## 7. Mức độ bằng chứng của các kết luận
+
+**Được log hỗ trợ:** RGCN tăng Accuracy ở đa số tập; tăng mạnh trên chèn/thay thế và GPT-3.5-Mixed; có trường hợp giảm trên matched, đoạn ngắn, nhiễu cực đoan; AUC không luôn tăng.
+
+**Giải thích hợp lý nhưng chưa chứng minh nhân quả:** nhãn quan hệ giúp học “dấu vân tay cú pháp”; basis decomposition chống overfit; tính bất biến cấu trúc tạo độ bền. Cần ablation để xác nhận.
+
+**Mới là lộ trình, chưa có kết quả triển khai trong log hiện tại:** DeBERTa-v3, GATv2/RGAT, GraphNorm, ràng buộc Dirichlet Energy, contrastive domain generalization, Mixture-of-Experts và Platt/temperature scaling.
+
+---
+
+## 8. Đề xuất cải tiến và thí nghiệm tiếp theo
+
+### Ưu tiên 1 — tăng độ tin cậy
+
+- Chạy ít nhất 5 seed; báo cáo mean ± std và bootstrap 95% CI.
+- Giữ cùng split, checkpoint selection, batch size và threshold cho mọi cặp.
+- Báo confusion matrix, precision/recall từng lớp, PR-AUC, ECE/Brier, TPR@1%FPR và TPR@5%FPR.
+- Tách tập hai lớp và một lớp; không báo AUC khi không xác định.
+- Ghi metadata cấu hình và loại bản ghi trùng trong log.
+
+### Ưu tiên 2 — xác định đóng góp RGCN
+
+- Ablation: bỏ/xáo trộn edge labels; có/không hướng; có/không self-loop.
+- Quét $B\in\{4,8,16,30,60\}$ và báo tham số, VRAM, thời gian train/inference.
+- So sánh 2/4/6 tầng với residual và normalization.
+- Phân tích lỗi theo loại quan hệ và độ tin cậy parser.
+
+### Ưu tiên 3 — xử lý điểm yếu
+
+- Calibration threshold trên validation cho các tập AUC tốt nhưng Accuracy giảm.
+- Kết hợp graph embedding với embedding `[CLS]` cho văn bản ngắn/cây hỏng.
+- Thử RGAT/GATv2 để hạ trọng số cạnh nhiễu; đánh giá riêng homoglyph, typo, whitespace.
+- Dùng GraphNorm, residual và theo dõi Dirichlet Energy khi tăng độ sâu.
+- Huấn luyện contrastive/domain-generalization trên nhiều miền.
+- Chỉ mở rộng đa ngôn ngữ sau khi thay parser và vocabulary quan hệ phù hợp.
+
+---
+
+## 9. Kết luận
+
+Nâng cấp GCN → RGCN có cơ sở toán học rõ ràng và được dữ liệu hiện tại ủng hộ mạnh. RGCN sửa trực tiếp việc mất nhãn quan hệ của mô hình cũ, tăng Accuracy trên 87,5% số tập và cải thiện lớn ở domain shift cùng nhiều tấn công token-level.
+
+Mô hình mạnh nhất khi văn bản còn đủ cấu trúc cú pháp; yếu nhất khi đồ thị quá nhỏ, bị phá hủy cực đoan, parser không đáng tin hoặc phân phối miền làm lệch ngưỡng. Kết quả một seed, AUC giảm ở một số benchmark, thiếu calibration và thiếu benchmark chi phí là các khoảng trống phải giải quyết trước khi tuyên bố ưu thế ổn định trong triển khai thực tế.
+
+---
+
+## 10. Nguồn nội bộ đã sử dụng
+
+- `docs/DuAn.md`: PRDetect gốc, pipeline, kết quả nền, điểm mạnh và hạn chế.
+- `docs/Update.md`: phân tích RAID và lộ trình kiến trúc.
+- `docs/BaoCao_PhanTich_GCN_sang_RGCN.md`: toán học và kết quả tiêu biểu.
+- `docs/BaoCao_SoSanh_HieuNang_RGCN_Full.md`: phân nhóm 120 tập và trường hợp tăng/giảm.
+- Bản cũ của `docs/BaoCaoNangCap.md`: thành phần triển khai và vận hành.
+- `result/RGCN_test_result.txt`: nguồn chính cho so sánh GCN–RGCN seed 2026.
+- `result/test_result.txt`: log lịch sử để đối chiếu bối cảnh, không ghép vào phép so sánh chính.
