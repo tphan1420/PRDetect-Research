@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://aclanthology.org/2025.findings-naacl.464/"><img src="https://img.shields.io/badge/NAACL_Findings-2025-blue.svg" alt="NAACL 2025"></a>
-  <img src="https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg?logo=pytorch" alt="PyTorch">
+  <img src="https://img.shields.io/badge/PyTorch-1.11-ee4c2c.svg?logo=pytorch" alt="PyTorch">
   <img src="https://img.shields.io/badge/PyG-torch__geometric-3C2179.svg" alt="PyG">
   <img src="https://img.shields.io/badge/SpaCy-en__core__web__sm-09A3D5.svg?logo=spacy" alt="SpaCy">
   <img src="https://img.shields.io/badge/License-Apache_2.0-green.svg" alt="License">
@@ -106,12 +106,12 @@ PRDetect-Research/
 ## 🛠️ 4. Installation & Environment Setup
 
 ### Prerequisites
-- Python 3.8 to 3.13
+- Python 3.8 (the pinned PyTorch wheel in `requirements.txt` targets CPython 3.8 and CUDA 11.3)
 - CUDA-enabled GPU (optional, CPU supported with fallback)
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/thulx18/PRDetect.git
+git clone https://github.com/tphan1420/PRDetect-Research.git
 cd PRDetect-Research
 
 # 2. Install dependencies
@@ -156,10 +156,10 @@ Train either the upgraded multi-relational RGCN or the baseline GCN:
 
 ```bash
 # 1. Train Relational GCN (RGCN - Recommended)
-python rgcn.py --dataset hc3 --seed 2024 --epochs 40 --lr 0.0001 --num_layers 2 --num_bases 30
+python rgcn.py --dataset hc3 --seed 2026 --epochs 40 --lr 0.0001 --num_layers 2 --num_bases 30
 
 # 2. Train 4-layer RGCN for longer or complex sentences
-python rgcn.py --dataset hc3 --seed 2024 --epochs 40 --num_layers 4
+python rgcn.py --dataset hc3 --seed 2026 --epochs 40 --num_layers 4
 
 # 3. Train Baseline GCN (Homogeneous)
 python gcn.py
@@ -171,18 +171,18 @@ Evaluate on test datasets to calculate Accuracy, ROC-AUC, and F1-score:
 
 ```bash
 # Dedicated evaluation for RGCN:
-python test_rgcn.py --file raid_gpt2_test --dataset hc3 --seed 2024 -s
+python test_rgcn.py --file raid_gpt2_test --dataset hc3 --seed 2026 -s
 
 # Unified evaluation using test.py:
-python test.py --file raid_gpt2_test --dataset hc3 --seed 2024 --model_type rgcn -s
-python test.py --file raid_gpt2_test --dataset hc3 --seed 2024 --model_type gcn -s
+python test.py --file raid_gpt2_test --dataset hc3 --seed 2026 --model_type rgcn -s
+python test.py --file raid_gpt2_test --dataset hc3 --seed 2026 --model_type gcn -s
 ```
 
 ### Step 5: Direct Text Inference (CLI)
 Classify any text as human-written or machine-generated:
 
 ```bash
-python detect.py --text "There are many factors that contribute to the intelligence gap between humans and other organisms." --dataset hc3 --seed 2024 --model_type rgcn
+python detect.py --text "There are many factors that contribute to the intelligence gap between humans and other organisms." --dataset hc3 --seed 2026 --model_type rgcn
 ```
 **Output:**
 ```plaintext
@@ -205,7 +205,7 @@ python detect.py --text "There are many factors that contribute to the intellige
 | **CoCo (Entity Graph)** | **0.9981** | 0.5432 | 0.5421 | 0.5333 | **1.0000** | 0.6995 | 0.6893 | 0.6805 |
 | **PRDetect (Ours)** | 0.9878 | **0.9878** | **0.9872** | **0.9864** | 0.9656 | **0.9630** | **0.9632** | **0.9638** |
 
-> **Key Finding:** When the perturbation ratio increases from 0% to 30%, PRDetect degrades by **less than 0.14%**, whereas traditional detectors degrade by nearly 50%.
+> **Key Finding:** When the perturbation ratio increases from 0% to 30%, PRDetect drops by at most **0.14 percentage points on HC3** and **0.26 percentage points on GPT-3.5**, whereas the traditional detectors in this table degrade by nearly 50%.
 
 ### Computational Efficiency (Tested on NVIDIA RTX 4090)
 
