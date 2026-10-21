@@ -354,7 +354,7 @@ def train_rgcn(args):
 
 
 def evaluate_rgcn(model, model_path, test_file_path, device, args):
-    """Đánh giá mô hình RGCN trên tập test với Mini-Batching và ghi kết quả vào test_result.txt"""
+    """Đánh giá RGCN bằng mini-batch và ghi kết quả vào result/test_result.txt."""
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 
@@ -403,11 +403,9 @@ def evaluate_rgcn(model, model_path, test_file_path, device, args):
     os.makedirs("./result", exist_ok=True)
     log_line = f"{args.test_file}\tacc: {test_acc:.4f}\tauc: {auc:.4f}\tf1: {test_f1:.4f}\tseed: {args.seed}\tmodel: {args.dataset}_rgcn_{args.num_layers}layer\t{datetime.now()}\n"
     
-    with open("test_result.txt", "a", encoding="utf-8") as f:
-        f.write(log_line)
     with open("./result/test_result.txt", "a", encoding="utf-8") as f:
         f.write(log_line)
-    print(f"-> Đã ghi nhật ký kết quả vào test_result.txt")
+    print("-> Đã ghi nhật ký kết quả vào ./result/test_result.txt")
 
 
 if __name__ == '__main__':

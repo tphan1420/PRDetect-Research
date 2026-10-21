@@ -60,32 +60,38 @@ $$h_{i}^{(l+1)} = \sigma\left(\sum_{r\in\mathcal{R}}\sum_{j\in\mathcal{N}_{i}^{r
 
 ```plaintext
 PRDetect-Research/
-├── 2025.findings-naacl.464.pdf   # Official paper published at NAACL 2025
-├── README.md                     # Project documentation & quickstart guide
-├── DuAn.md                       # Comprehensive research report & technical analysis (Vietnamese)
-├── Update.md                     # RAID benchmark analysis & architectural roadmap
-├── requirements.txt              # Python package dependencies
+├── README.md                     # Quickstart and project overview
+├── requirements.txt             # Python dependencies
+├── dep_vocab.json               # Dependency relation mappings
 │
-├── dep_vocab.py                  # Canonical dependency relation vocabulary (60+ relations)
-├── dep_vocab.json                # Predefined dependency relation mappings
-├── building_graph.py             # Dependency parsing & graph dataset builder (edge_index + edge_type)
+├── building_graph.py            # Dependency graph builder
+├── convert_datasets.py          # RAID/DetectRL dataset converter
+├── prepare_raid_data.py         # RAID preparation utility
+├── dep_vocab.py                 # Dependency relation vocabulary
+├── gcn.py                       # GCN training pipeline
+├── rgcn.py                      # RGCN training pipeline
+├── test.py                      # Unified GCN/RGCN evaluation
+├── test_rgcn.py                 # Dedicated RGCN evaluation
+├── detect.py                    # Text inference CLI
+├── drawtree.py                  # Syntax-tree visualization
+│
 ├── model/
-│   ├── GCN2.py                   # Baseline 2-layer homogeneous GCN
-│   └── RGCN.py                   # Relational GCN architectures (RGCN2, RGCN4, RelationalGCN)
+│   ├── GCN2.py                  # Baseline GCN architecture
+│   ├── RGCN.py                  # Relational GCN architectures
+│   └── *.pth                    # Model checkpoints
 │
-├── rgcn.py                       # Training pipeline for multi-relational RGCN
-├── gcn.py                        # Training script for baseline GCN
-├── test_rgcn.py                  # Dedicated evaluation script for RGCN models
-├── test.py                       # Unified test script supporting both GCN and RGCN (--model_type)
-├── detect.py                     # Direct inference CLI for custom text inputs
-├── convert_datasets.py           # Dataset converter for RAID & DetectRL benchmarks
-├── drawtree.py                   # Syntax tree visualization utility
-│
-├── datasets/                     # Raw downloaded datasets (RAID, DetectRL, etc.)
-├── original_text/                # Processed JSONL dataset files (HC3, RAID, GPT3.5-Mixed)
-├── graph_data/                   # Preprocessed tensor graph datasets (.pkl)
-├── model/                        # Saved model checkpoints (*.pth)
-└── logs/ & output/               # TensorBoard logs and experiment outputs
+├── datasets/                    # Raw downloaded datasets
+├── data/
+│   ├── original_text/           # Benchmarks, generated and derived source datasets
+│   ├── perturbed_text/          # Source dataset → perturbation type
+│   └── README.md                # Data layout and placement rules
+├── graph_data/                  # Preprocessed graph tensors
+├── result/                      # Evaluation result files
+├── logs/                        # Training and TensorBoard logs
+├── output/                      # Generated analysis outputs
+├── notebooks/                   # Kaggle, analysis, preprocessing and experiment notebooks
+├── docs/                        # Research reports and technical documentation
+└── papers/                      # Referenced research papers
 ```
 
 ---

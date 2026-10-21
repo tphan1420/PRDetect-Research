@@ -1,5 +1,6 @@
 import sys
 import os
+import glob
 import time
 import json
 import pickle
@@ -138,11 +139,18 @@ def read_json(file_name):
     clean_name = file_name[:-5] if file_name.endswith(".json") else file_name
 
     candidates = [
-        os.path.join("original_text", f"{clean_name}.json"),
-        os.path.join("perturbed_text", f"{clean_name}.json"),
         f"{clean_name}.json",
         file_name
     ]
+
+    # Dataset được phân loại thành các thư mục con theo benchmark và loại nhiễu.
+    # Giữ CLI cũ: --file hc3_test vẫn hoạt động mà không cần truyền đường dẫn đầy đủ.
+    for data_root in (
+        os.path.join("data", "original_text"),
+        os.path.join("data", "perturbed_text"),
+    ):
+        pattern = os.path.join(data_root, "**", f"{clean_name}.json")
+        candidates.extend(sorted(glob.glob(pattern, recursive=True)))
 
     target_path = None
     for cand in candidates:
@@ -152,7 +160,7 @@ def read_json(file_name):
 
     if target_path is None:
         raise FileNotFoundError(
-            f"Không tìm thấy file '{file_name}' trong original_text/ hoặc perturbed_text/!"
+            f"Không tìm thấy file '{file_name}' trong data/original_text/ hoặc data/perturbed_text/!"
         )
 
     print(f"-> Nạp văn bản từ: {target_path}")
@@ -185,7 +193,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Xây dựng Cây cú pháp Đa quan hệ (RGCN) và Đồ thị đặc trưng cho PRDetect")
     parser.add_argument(
         "--file", "-f", nargs="+", default=None,
-        help="Tên file hoặc danh sách các file trong original_text/ cần build graph (VD: --file raid_gpt2_test hoặc -f f1 f2)"
+        help="Tên file hoặc danh sách các file trong data/ cần build graph (VD: --file raid_gpt2_test hoặc -f f1 f2)"
     )
     parser.add_argument(
         "--bidirectional", "-b", action="store_true",

@@ -61,8 +61,8 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Trích xuất và cân bằng tập dữ liệu RAID từ Hugging Face Parquet shards."
     )
-    parser.add_argument("--output_dir", type=str, default="original_text",
-                        help="Thư mục lưu các file train, val và test (mặc định: 'original_text')")
+    parser.add_argument("--output_dir", type=str, default="data/original_text/benchmarks/raid",
+                        help="Thư mục lưu các file train, val và test (mặc định: 'data/original_text/benchmarks/raid')")
     parser.add_argument("--prefix", type=str, default="mini_raid_",
                         help="Tiền tố tên file (mặc định: 'mini_raid_')")
     parser.add_argument("--test_dir", type=str, default="",

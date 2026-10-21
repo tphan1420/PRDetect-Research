@@ -9,5 +9,7 @@ datasets/
 __pycache__/
 *.pyc
 graph_data/
-result/
+result/*
+!result/test_result.txt
+!result/RGCN_test_result.txt
 .pytest_cache/

@@ -238,11 +238,9 @@ def test_rgcn(test_file, dataset_name, seed, num_layers=2, num_bases=30,
     if do_save:
         os.makedirs("./result", exist_ok=True)
         log_line = f"{test_file}\tacc: {test_acc:.4f}\tauc: {auc:.4f}\tf1: {test_f1:.4f}\tseed: {seed}\tmodel: {dataset_name}_rgcn\t{datetime.now()}\n"
-        with open("test_result.txt", "a", encoding="utf-8") as f:
-            f.write(log_line)
         with open("./result/test_result.txt", "a", encoding="utf-8") as f:
             f.write(log_line)
-        print("-> Đã lưu kết quả vào test_result.txt và ./result/test_result.txt")
+        print("-> Đã lưu kết quả vào ./result/test_result.txt")
 
     return y_pred, test_pres
 

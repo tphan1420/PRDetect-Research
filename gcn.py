@@ -313,8 +313,6 @@ def evaluate_gcn(model, model_path, test_file_path, device, args):
 
     os.makedirs("./result", exist_ok=True)
     log_line = f"{args.test_file}\tacc: {test_acc:.4f}\tauc: {auc:.4f}\tf1: {test_f1:.4f}\tseed: {args.seed}\tmodel: {args.dataset}_gcn\t{datetime.now()}\n"
-    with open("test_result.txt", "a", encoding="utf-8") as f:
-        f.write(log_line)
     with open("./result/test_result.txt", "a", encoding="utf-8") as f:
         f.write(log_line)
 

@@ -244,8 +244,6 @@ def test(test_file, dataset_name, seed, model_type='gcn', batch_size=32):
         log_line = f"{test_file}\t acc: {test_acc:.4f}\t auc: {auc:.4f}\t f1: {test_f1:.4f}\t seed: {seed}\t model: {dataset_name}_{model_type}\t{datetime.now()}\n"
         with open("./result/test_result.txt", "a", encoding="utf-8") as w:
             w.write(log_line)
-        with open("test_result.txt", "a", encoding="utf-8") as w:
-            w.write(log_line)
 
     return y_pred
 

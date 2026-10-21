@@ -7,7 +7,7 @@ import time
 files = ["hc3_test_delete_15.json", "hc3_test_repeat_15.json", "hc3_test_insert_15.json", "hc3_test_replace_15.json"]
 for file_name in files:
     with open(f"gpt2-detector/gpt2-detector-{file_name}", "w", encoding = "utf-8") as w:
-        with open(f"perturbed_text/{file_name}", "r", encoding = "utf-8") as f:
+        with open(f"data/perturbed_text/{file_name}", "r", encoding = "utf-8") as f:
             lines = f.readlines()
             for i in tqdm(range(len(lines))):
                 try:
