@@ -12,7 +12,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-DEFAULT_OUTPUT_DIR = "original_text"
+DEFAULT_OUTPUT_DIR = os.path.join("data", "original_text", "converted")
 DATASETS_DIR = "datasets"
 
 def list_available_datasets():
@@ -166,7 +166,7 @@ def main():
     )
     parser.add_argument(
         "--output", "-o", type=str, default=None,
-        help="Tên file đầu ra (không cần đuôi .json, sẽ được lưu vào original_text/). Mặc định tự sinh theo tên file gốc."
+        help="Tên file đầu ra (không cần đuôi .json, sẽ được lưu vào data/original_text/converted/). Mặc định tự sinh theo tên file gốc."
     )
     parser.add_argument(
         "--output_dir", "-d", type=str, default=DEFAULT_OUTPUT_DIR,
