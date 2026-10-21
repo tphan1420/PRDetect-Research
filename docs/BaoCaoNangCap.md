@@ -78,11 +78,13 @@ trong đó $\mathcal V$ là các token, $\mathcal E$ chứa cạnh có hướng 
 Trạng thái nút $i$ được cập nhật bởi:
 
 $$
-h_i^{(l+1)}=\sigma\left(
-\sum_{r\in\mathcal R}\sum_{j\in\mathcal N_i^r}
-\frac{1}{c_{i,r}}W_r^{(l)}h_j^{(l)}
-+W_0^{(l)}h_i^{(l)}
-\right).
+h_i^{(l+1)}
+= \sigma\left(
+    \sum\limits_{r \in \mathcal{R}}
+    \sum\limits_{j \in \mathcal{N}_i^r}
+    \frac{1}{c_{i,r}}\, W_r^{(l)}\, h_j^{(l)}
+    + W_0^{(l)}\, h_i^{(l)}
+\right)
 $$
 
 | Ký hiệu | Ý nghĩa |
@@ -306,13 +308,3 @@ Nâng cấp GCN → RGCN có cơ sở toán học rõ ràng và được dữ li
 Mô hình mạnh nhất khi văn bản còn đủ cấu trúc cú pháp; yếu nhất khi đồ thị quá nhỏ, bị phá hủy cực đoan, parser không đáng tin hoặc phân phối miền làm lệch ngưỡng. Kết quả một seed, AUC giảm ở một số benchmark, thiếu calibration và thiếu benchmark chi phí là các khoảng trống phải giải quyết trước khi tuyên bố ưu thế ổn định trong triển khai thực tế.
 
 ---
-
-## 10. Nguồn nội bộ đã sử dụng
-
-- `docs/DuAn.md`: PRDetect gốc, pipeline, kết quả nền, điểm mạnh và hạn chế.
-- `docs/Update.md`: phân tích RAID và lộ trình kiến trúc.
-- `docs/BaoCao_PhanTich_GCN_sang_RGCN.md`: toán học và kết quả tiêu biểu.
-- `docs/BaoCao_SoSanh_HieuNang_RGCN_Full.md`: phân nhóm 120 tập và trường hợp tăng/giảm.
-- Bản cũ của `docs/BaoCaoNangCap.md`: thành phần triển khai và vận hành.
-- `result/RGCN_test_result.txt`: nguồn chính cho so sánh GCN–RGCN seed 2026.
-- `result/test_result.txt`: log lịch sử để đối chiếu bối cảnh, không ghép vào phép so sánh chính.
