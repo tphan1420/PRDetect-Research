@@ -9,7 +9,9 @@ datasets/
 __pycache__/
 *.pyc
 graph_data/
+graph_data_v2/
 result/*
 !result/test_result.txt
 !result/RGCN_test_result.txt
 .pytest_cache/
+.venv/
