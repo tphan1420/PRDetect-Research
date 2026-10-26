@@ -10,6 +10,9 @@ from torch_geometric.nn import GraphNorm, RGCNConv, global_max_pool, global_mean
 from relation_vocab_v2 import DOCUMENT_NODE, NUM_RELATIONS
 
 
+ABLATION_MODES = ("hybrid", "sequence_only", "graph_only")
+
+
 class PRDetectV2(nn.Module):
     """Fuse a sequence representation with a two-layer hierarchical RGCN."""
 
@@ -24,10 +27,17 @@ class PRDetectV2(nn.Module):
         num_relations: int = NUM_RELATIONS,
         num_bases: int = 30,
         dropout: float = 0.3,
+        mode: str = "hybrid",
     ) -> None:
         super().__init__()
+        if mode not in ABLATION_MODES:
+            raise ValueError(
+                "mode must be one of {}, got {!r}.".format(ABLATION_MODES, mode)
+            )
         self.input_dim = input_dim
+        self.fusion_dim = fusion_dim
         self.num_relations = num_relations
+        self.mode = mode
 
         self.conv1 = RGCNConv(
             input_dim,
@@ -102,44 +112,62 @@ class PRDetectV2(nn.Module):
     def forward(
         self, data: Any, return_aux: bool = False
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
-        x = data.x
-        edge_index = data.edge_index
-        edge_type = data.edge_type
-        batch = data.batch
-        node_type = data.node_type
         sequence_embedding = data.sequence_embedding.view(-1, self.input_dim)
         quality_features = data.quality_features.view(sequence_embedding.size(0), -1)
         num_graphs = sequence_embedding.size(0)
-
-        first = self.conv1(x, edge_index, edge_type)
-        first = self.graph_norm1(first, batch)
-        first = F.gelu(first + self.residual1(x))
-        first = self.dropout(first)
-
-        second = self.conv2(first, edge_index, edge_type)
-        second = self.graph_norm2(second, batch)
-        second = F.gelu(second + self.residual2(first))
-        second = self.dropout(second)
-
-        mean_pool = global_mean_pool(second, batch, size=num_graphs)
-        max_pool = global_max_pool(second, batch, size=num_graphs)
-        document_pool = self._document_pool(
-            second, batch, node_type, num_graphs=num_graphs
-        )
-        graph_vector = self.graph_projection(
-            torch.cat([mean_pool, max_pool, document_pool], dim=-1)
-        )
-        sequence_vector = self.sequence_projection(sequence_embedding)
         quality_vector = self.quality_encoder(quality_features)
 
-        gate_input = torch.cat(
-            [graph_vector, sequence_vector, quality_vector], dim=-1
+        graph_vector = sequence_embedding.new_zeros(
+            (num_graphs, self.fusion_dim)
         )
-        gate_weights = torch.softmax(self.gate(gate_input), dim=-1)
-        fused = (
-            gate_weights[:, 0:1] * graph_vector
-            + gate_weights[:, 1:2] * sequence_vector
+        if self.mode != "sequence_only":
+            x = data.x
+            batch = data.batch
+            first = self.conv1(x, data.edge_index, data.edge_type)
+            first = self.graph_norm1(first, batch)
+            first = F.gelu(first + self.residual1(x))
+            first = self.dropout(first)
+
+            second = self.conv2(first, data.edge_index, data.edge_type)
+            second = self.graph_norm2(second, batch)
+            second = F.gelu(second + self.residual2(first))
+            second = self.dropout(second)
+
+            mean_pool = global_mean_pool(second, batch, size=num_graphs)
+            max_pool = global_max_pool(second, batch, size=num_graphs)
+            document_pool = self._document_pool(
+                second, batch, data.node_type, num_graphs=num_graphs
+            )
+            graph_vector = self.graph_projection(
+                torch.cat([mean_pool, max_pool, document_pool], dim=-1)
+            )
+
+        sequence_vector = sequence_embedding.new_zeros(
+            (num_graphs, self.fusion_dim)
         )
+        if self.mode != "graph_only":
+            sequence_vector = self.sequence_projection(sequence_embedding)
+
+        if self.mode == "hybrid":
+            gate_input = torch.cat(
+                [graph_vector, sequence_vector, quality_vector], dim=-1
+            )
+            gate_weights = torch.softmax(self.gate(gate_input), dim=-1)
+            fused = (
+                gate_weights[:, 0:1] * graph_vector
+                + gate_weights[:, 1:2] * sequence_vector
+            )
+        elif self.mode == "graph_only":
+            gate_weights = sequence_embedding.new_tensor([1.0, 0.0]).expand(
+                num_graphs, -1
+            )
+            fused = graph_vector
+        else:
+            gate_weights = sequence_embedding.new_tensor([0.0, 1.0]).expand(
+                num_graphs, -1
+            )
+            fused = sequence_vector
+
         logits = self.classifier(torch.cat([fused, quality_vector], dim=-1))
 
         if not return_aux:

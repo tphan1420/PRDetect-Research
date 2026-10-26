@@ -20,7 +20,7 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 
-from model.PRDetectV2 import PRDetectV2
+from model.PRDetectV2 import ABLATION_MODES, PRDetectV2
 from v2_data import (
     infer_dimensions,
     load_payload,
@@ -139,7 +139,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-bases", type=int, default=30)
     parser.add_argument("--dropout", type=float, default=0.3)
     parser.add_argument("--patience", type=int, default=6)
+    parser.add_argument("--mode", choices=ABLATION_MODES, default="hybrid")
     parser.add_argument("--checkpoint", type=Path, default=None)
+    parser.add_argument("--result-dir", type=Path, default=Path("result"))
     parser.add_argument("--cpu", action="store_true")
     return parser.parse_args()
 
@@ -182,6 +184,7 @@ def main() -> None:
         "num_relations": dimensions["num_relations"],
         "num_bases": args.num_bases,
         "dropout": args.dropout,
+        "mode": args.mode,
     }
     model = PRDetectV2(**model_config).to(device)
     optimizer = torch.optim.AdamW(
@@ -190,10 +193,14 @@ def main() -> None:
     criterion = nn.BCEWithLogitsLoss()
 
     checkpoint_path = args.checkpoint or Path(
-        "model/{}_prdetect_v2_model_{}.pth".format(args.dataset, args.seed)
+        "model/{}_prdetect_v2_{}_{}.pth".format(
+            args.dataset, args.mode, args.seed
+        )
     )
-    training_config = vars(args).copy()
-    training_config["graph_dir"] = str(training_config["graph_dir"])
+    training_config = {
+        key: str(value) if isinstance(value, Path) else value
+        for key, value in vars(args).items()
+    }
     training_config["checkpoint"] = str(checkpoint_path)
     graph_metadata = {
         "schema_version": train_payload["schema_version"],
@@ -208,8 +215,8 @@ def main() -> None:
     history: List[Dict[str, Any]] = []
 
     print(
-        "PRDetect V2 | device={} | train={} | val={} | checkpoint={}"
-        .format(device, len(train_data), len(val_data), checkpoint_path)
+        "PRDetect V2 | mode={} | device={} | train={} | val={} | checkpoint={}"
+        .format(args.mode, device, len(train_data), len(val_data), checkpoint_path)
     )
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -271,10 +278,9 @@ def main() -> None:
                 print("Early stopping after {} stale epochs.".format(args.patience))
                 break
 
-    result_dir = Path("result")
-    result_dir.mkdir(exist_ok=True)
-    summary_path = result_dir / "{}_prdetect_v2_train_{}.json".format(
-        args.dataset, args.seed
+    args.result_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = args.result_dir / "{}_prdetect_v2_{}_train_{}.json".format(
+        args.dataset, args.mode, args.seed
     )
     summary_path.write_text(
         json.dumps(

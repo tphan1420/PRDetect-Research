@@ -23,7 +23,7 @@ Không có huấn luyện hoặc kiểm thử thực nghiệm nào được ch�
 | [`train_v2.py`](../train_v2.py) | Huấn luyện và chọn checkpoint theo validation AUROC |
 | [`test_v2.py`](../test_v2.py) | Đánh giá checkpoint V2 trên Kaggle |
 
-Graph V2 được ghi vào `graph_data_v2/`, còn checkpoint mặc định được ghi vào `model/<dataset>_prdetect_v2_model_<seed>.pth`.
+Graph V2 được ghi vào `graph_data_v2/`, còn checkpoint mặc định được ghi vào `model/<dataset>_prdetect_v2_<mode>_<seed>.pth`.
 
 ## 3. A1 - căn chỉnh SpaCy và Transformer
 
@@ -269,6 +269,7 @@ python train_v2.py \
   --dataset hc3 \
   --train-file hc3_train \
   --val-file hc3_val \
+  --mode hybrid \
   --seed 2026 \
   --epochs 40 \
   --batch-size 16
@@ -277,7 +278,7 @@ python train_v2.py \
 Checkpoint mặc định:
 
 ```text
-model/hc3_prdetect_v2_model_2026.pth
+model/hc3_prdetect_v2_hybrid_2026.pth
 ```
 
 Checkpoint được chọn theo validation AUROC. Nếu validation chỉ chứa một lớp, script dùng Accuracy làm fallback.
@@ -291,7 +292,7 @@ python building_graph_v2.py \
 
 python test_v2.py \
   --file gpt3.5_mixed_test_split \
-  --checkpoint model/hc3_prdetect_v2_model_2026.pth \
+  --checkpoint model/hc3_prdetect_v2_hybrid_2026.pth \
   --output result/v2_gpt35_clean.json
 ```
 
@@ -304,9 +305,22 @@ python building_graph_v2.py \
 
 python test_v2.py \
   --file gpt3.5_mixed_test_adj_30_synonym_replace \
-  --checkpoint model/hc3_prdetect_v2_model_2026.pth \
+  --checkpoint model/hc3_prdetect_v2_hybrid_2026.pth \
   --output result/v2_gpt35_synonym_30.json
 ```
+
+### 7.4. Chạy ablation
+
+Ba chế độ dùng cùng graph, quality features và training protocol:
+
+```bash
+python train_v2.py --mode sequence_only --result-dir result/ablation
+python train_v2.py --mode graph_only --result-dir result/ablation
+python train_v2.py --mode hybrid --result-dir result/ablation
+```
+
+Checkpoint và training summary có tên chứa mode nên không ghi đè nhau. Dùng
+`test_v2.py` với checkpoint tương ứng; mode được đọc trực tiếp từ checkpoint.
 
 ## 8. Các đảm bảo tương thích
 

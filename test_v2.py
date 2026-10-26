@@ -69,7 +69,9 @@ def main() -> None:
         if graph_metadata[key] != payload[key]:
             raise ValueError("Checkpoint và graph không khớp metadata '{}'.".format(key))
 
-    model = PRDetectV2(**checkpoint["model_config"]).to(device)
+    model_config = checkpoint["model_config"]
+    mode = model_config.get("mode", "hybrid")
+    model = PRDetectV2(**model_config).to(device)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
     criterion = nn.BCEWithLogitsLoss()
@@ -106,6 +108,7 @@ def main() -> None:
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "graph": str(graph_path),
         "checkpoint": str(args.checkpoint),
+        "mode": mode,
         "samples": total_samples,
         "threshold": args.threshold,
         "loss": total_loss / max(total_samples, 1),
