@@ -61,7 +61,6 @@ def payload_to_data_list(payload: Dict[str, Any]) -> List[Data]:
         edge_index = graph["edge_index"].long()
         edge_type = graph["edge_type"].long()
         node_type = graph["node_type"].long()
-        sequence_embedding = graph["sequence_embedding"].float().view(1, -1)
         quality_features = graph["quality_features"].float().view(1, -1)
 
         if x.dim() != 2:
@@ -74,10 +73,6 @@ def payload_to_data_list(payload: Dict[str, Any]) -> List[Data]:
             raise ValueError("Graph #{}: node_type không khớp x.".format(index))
         if int((node_type == DOCUMENT_NODE).sum().item()) != 1:
             raise ValueError("Graph #{}: cần đúng một document node.".format(index))
-        if sequence_embedding.size(1) != x.size(1):
-            raise ValueError(
-                "Graph #{}: sequence và node embedding khác chiều.".format(index)
-            )
 
         data_list.append(
             Data(
@@ -85,7 +80,6 @@ def payload_to_data_list(payload: Dict[str, Any]) -> List[Data]:
                 edge_index=edge_index,
                 edge_type=edge_type,
                 node_type=node_type,
-                sequence_embedding=sequence_embedding,
                 quality_features=quality_features,
                 y=labels[index].float().view(1),
             )

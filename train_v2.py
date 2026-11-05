@@ -20,7 +20,7 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 
-from model.PRDetectV2 import ABLATION_MODES, PRDetectV2
+from model.PRDetectV2 import CHECKPOINT_FORMAT, PRDetectV2
 from v2_data import (
     infer_dimensions,
     load_payload,
@@ -109,7 +109,7 @@ def save_checkpoint(
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
-            "format_version": "2.0",
+            "format_version": CHECKPOINT_FORMAT,
             "model_state": model.state_dict(),
             "model_config": model_config,
             "training_config": training_config,
@@ -134,12 +134,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-decay", type=float, default=1e-5)
     parser.add_argument("--hidden-dim", type=int, default=256)
     parser.add_argument("--graph-dim", type=int, default=128)
-    parser.add_argument("--fusion-dim", type=int, default=256)
+    parser.add_argument("--projection-dim", type=int, default=256)
     parser.add_argument("--quality-hidden-dim", type=int, default=32)
     parser.add_argument("--num-bases", type=int, default=30)
     parser.add_argument("--dropout", type=float, default=0.3)
     parser.add_argument("--patience", type=int, default=6)
-    parser.add_argument("--mode", choices=ABLATION_MODES, default="hybrid")
+    parser.add_argument("--use-quality", action="store_true",
+                        help="Enable quality features for the controlled ablation.")
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--result-dir", type=Path, default=Path("result"))
     parser.add_argument("--cpu", action="store_true")
@@ -178,13 +179,13 @@ def main() -> None:
         "input_dim": dimensions["input_dim"],
         "hidden_dim": args.hidden_dim,
         "graph_dim": args.graph_dim,
-        "fusion_dim": args.fusion_dim,
+        "projection_dim": args.projection_dim,
         "quality_dim": dimensions["quality_dim"],
         "quality_hidden_dim": args.quality_hidden_dim,
         "num_relations": dimensions["num_relations"],
         "num_bases": args.num_bases,
         "dropout": args.dropout,
-        "mode": args.mode,
+        "use_quality": args.use_quality,
     }
     model = PRDetectV2(**model_config).to(device)
     optimizer = torch.optim.AdamW(
@@ -192,9 +193,10 @@ def main() -> None:
     )
     criterion = nn.BCEWithLogitsLoss()
 
+    experiment = "a1a2_quality" if args.use_quality else "a1a2_noquality"
     checkpoint_path = args.checkpoint or Path(
         "model/{}_prdetect_v2_{}_{}.pth".format(
-            args.dataset, args.mode, args.seed
+            args.dataset, experiment, args.seed
         )
     )
     training_config = {
@@ -215,8 +217,8 @@ def main() -> None:
     history: List[Dict[str, Any]] = []
 
     print(
-        "PRDetect V2 | mode={} | device={} | train={} | val={} | checkpoint={}"
-        .format(args.mode, device, len(train_data), len(val_data), checkpoint_path)
+        "PRDetect V2 | experiment={} | device={} | train={} | val={} | checkpoint={}"
+        .format(experiment, device, len(train_data), len(val_data), checkpoint_path)
     )
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -280,7 +282,7 @@ def main() -> None:
 
     args.result_dir.mkdir(parents=True, exist_ok=True)
     summary_path = args.result_dir / "{}_prdetect_v2_{}_train_{}.json".format(
-        args.dataset, args.mode, args.seed
+        args.dataset, experiment, args.seed
     )
     summary_path.write_text(
         json.dumps(

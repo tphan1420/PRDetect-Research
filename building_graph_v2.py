@@ -3,8 +3,6 @@
 A1: align SpaCy words with Transformer subwords using a fast tokenizer.
 A2: add reverse dependency edges, sequential edges, sentence nodes and one
     document node so all sentence trees in a document become connected.
-A3: store a sequence-level embedding produced by the same frozen encoder for
-    the hybrid sequence/graph classifier.
 """
 
 import argparse
@@ -109,7 +107,7 @@ def read_records(path: Path) -> List[Dict[str, Any]]:
 
 
 class FrozenTextEncoder:
-    """Create aligned word features and one sequence feature per document."""
+    """Create aligned word features for the document graph."""
 
     def __init__(
         self,
@@ -141,8 +139,8 @@ class FrozenTextEncoder:
 
     def encode_words(
         self, words: Sequence[str]
-    ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, float]]:
-        """Align subword states to SpaCy words and pool a sequence vector."""
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """Align subword states to SpaCy words."""
 
         encoded = self.tokenizer(
             list(words),
@@ -177,7 +175,6 @@ class FrozenTextEncoder:
         word_count = torch.zeros(
             (num_words, 1), device=self.device, dtype=torch.float32
         )
-        sequence_chunks: List[torch.Tensor] = []
         unknown_subwords = 0
         visible_subwords = 0
 
@@ -215,7 +212,6 @@ class FrozenTextEncoder:
 
             content_mask = attention_mask[chunk_index] & ~special_mask[chunk_index]
             if content_mask.any():
-                sequence_chunks.append(hidden[chunk_index, content_mask].mean(dim=0))
                 visible_subwords += int(content_mask.sum().item())
                 if unk_token_id is not None:
                     unknown_subwords += int(
@@ -224,19 +220,18 @@ class FrozenTextEncoder:
                         .item()
                     )
 
-        if not sequence_chunks:
+        if not visible_subwords:
             raise ValueError("Tokenizer không tạo được content token.")
 
         missing_words = int((word_count.squeeze(-1) == 0).sum().item())
         word_embeddings = word_sum / word_count.clamp(min=1.0)
-        sequence_embedding = torch.stack(sequence_chunks, dim=0).mean(dim=0)
 
         stats = {
             "unk_subword_ratio": unknown_subwords / max(visible_subwords, 1),
             "missing_word_ratio": missing_words / max(num_words, 1),
-            "num_windows": float(len(sequence_chunks)),
+            "num_windows": float(hidden.size(0)),
         }
-        return word_embeddings.cpu(), sequence_embedding.cpu(), stats
+        return word_embeddings.cpu(), stats
 
 
 def _add_edge(
@@ -255,7 +250,6 @@ def _add_edge(
 def build_document_graph(
     doc: Any,
     word_embeddings: torch.Tensor,
-    sequence_embedding: torch.Tensor,
     encoding_stats: Dict[str, float],
 ) -> Dict[str, torch.Tensor]:
     """Build one connected hierarchical document graph."""
@@ -406,7 +400,6 @@ def build_document_graph(
         "edge_index": edge_index,
         "edge_type": edge_type,
         "node_type": node_type,
-        "sequence_embedding": sequence_embedding,
         "quality_features": quality_features,
     }
 
@@ -472,9 +465,9 @@ def build_graph_file(
             words = [token.text for token in doc]
             if not words:
                 raise ValueError("Văn bản không tạo ra token SpaCy.")
-            word_embeddings, sequence_embedding, stats = encoder.encode_words(words)
+            word_embeddings, stats = encoder.encode_words(words)
             graph = build_document_graph(
-                doc, word_embeddings, sequence_embedding, stats
+                doc, word_embeddings, stats
             )
             validate_graph(graph)
             graphs.append(graph)

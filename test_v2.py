@@ -10,11 +10,11 @@ from typing import Any, Dict, List
 
 import torch
 import torch.nn as nn
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, roc_auc_score
 from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 
-from model.PRDetectV2 import PRDetectV2
+from model.PRDetectV2 import CHECKPOINT_FORMAT, PRDetectV2
 from v2_data import load_payload, payload_to_data_list, resolve_graph_file
 
 
@@ -56,8 +56,11 @@ def main() -> None:
     loader = DataLoader(data_list, batch_size=args.batch_size, shuffle=False)
 
     checkpoint = torch.load(args.checkpoint, map_location=device)
-    if checkpoint.get("format_version") != "2.0":
-        raise ValueError("Checkpoint không phải định dạng PRDetect V2.")
+    if checkpoint.get("format_version") != CHECKPOINT_FORMAT:
+        raise ValueError(
+            "Cần checkpoint A1+A2 mới (2.1-graph). Checkpoint V2 cũ không tương thích; "
+            "hãy train lại bằng train_v2.py."
+        )
     graph_metadata = checkpoint["graph_metadata"]
     for key in (
         "schema_version",
@@ -70,7 +73,6 @@ def main() -> None:
             raise ValueError("Checkpoint và graph không khớp metadata '{}'.".format(key))
 
     model_config = checkpoint["model_config"]
-    mode = model_config.get("mode", "hybrid")
     model = PRDetectV2(**model_config).to(device)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
@@ -78,7 +80,6 @@ def main() -> None:
 
     labels: List[int] = []
     probabilities: List[float] = []
-    gate_sums = torch.zeros(2, dtype=torch.float64)
     total_loss = 0.0
     total_samples = 0
     started = time.time()
@@ -86,7 +87,7 @@ def main() -> None:
     with torch.inference_mode():
         for batch in tqdm(loader, desc="Testing PRDetect V2"):
             batch = batch.to(device)
-            logits, auxiliary = model(batch, return_aux=True)
+            logits = model(batch)
             targets = batch.y.float().view(-1, 1)
             loss = criterion(logits, targets)
             batch_size = targets.size(0)
@@ -94,7 +95,6 @@ def main() -> None:
             total_samples += batch_size
             probabilities.extend(torch.sigmoid(logits).view(-1).cpu().tolist())
             labels.extend(targets.view(-1).long().cpu().tolist())
-            gate_sums += auxiliary["gate_weights"].sum(dim=0).double().cpu()
 
     predictions = [
         1 if probability >= args.threshold else 0 for probability in probabilities
@@ -108,15 +108,18 @@ def main() -> None:
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "graph": str(graph_path),
         "checkpoint": str(args.checkpoint),
-        "mode": mode,
+        "use_quality": model.use_quality,
         "samples": total_samples,
         "threshold": args.threshold,
         "loss": total_loss / max(total_samples, 1),
         "accuracy": float(accuracy_score(labels, predictions)),
         "auc": auc,
         "f1": float(f1_score(labels, predictions, zero_division=0)),
-        "mean_graph_gate": float(gate_sums[0].item() / max(total_samples, 1)),
-        "mean_sequence_gate": float(gate_sums[1].item() / max(total_samples, 1)),
+        "confusion_matrix_ai_human": confusion_matrix(
+            labels, predictions, labels=[0, 1]
+        ).tolist(),
+        "predicted_human": sum(predictions),
+        "mean_probability_human": sum(probabilities) / total_samples,
         "elapsed_seconds": time.time() - started,
     }
 
