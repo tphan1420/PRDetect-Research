@@ -12,6 +12,8 @@ import sys
 import time
 import pickle
 import argparse
+import json
+from pathlib import Path
 from datetime import datetime
 
 if sys.platform == "win32":
@@ -115,6 +117,7 @@ except ImportError:
 
 from model.RGCN import RGCN2, RGCN4, RelationalGCN
 from dep_vocab import get_default_vocab
+from ema import ModelEMA
 
 
 def load_graph_data(file_path):
@@ -163,6 +166,29 @@ def create_pyg_data_list(graph_dict):
 
 
 def train_rgcn(args):
+    # Validate output paths before loading potentially large graph caches.
+    use_ema = getattr(args, 'ema', False)
+    ema_decay = getattr(args, 'ema_decay', 0.99)
+    if use_ema and not 0.0 <= ema_decay < 1.0:
+        raise ValueError("EMA decay must satisfy 0 <= decay < 1.")
+    if args.epochs < 1:
+        raise ValueError("epochs must be at least 1.")
+    model_save_path = args.save_path or f"./model/{args.dataset}_rgcn_model_{int(args.seed)}.pth"
+    raw_path = Path(model_save_path)
+    ema_save_path = None
+    if use_ema:
+        ema_save_path = getattr(args, 'ema_save_path', None) or str(
+            raw_path.with_name(raw_path.stem + '_ema' + raw_path.suffix)
+        )
+        if raw_path.resolve() == Path(ema_save_path).resolve():
+            raise ValueError("Raw and EMA checkpoints must have different paths.")
+        if Path(ema_save_path).with_suffix('.json').resolve() in {
+            raw_path.resolve(), Path(ema_save_path).resolve()
+        }:
+            raise ValueError("EMA JSON summary must not overwrite either checkpoint; use .pth paths.")
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    if use_ema:
+        Path(ema_save_path).parent.mkdir(parents=True, exist_ok=True)
     # Thiết lập Random Seed
     seed = int(args.seed)
     torch.manual_seed(seed)
@@ -243,6 +269,14 @@ def train_rgcn(args):
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     criterion = nn.BCELoss()
 
+    # Copying the initialized model does not consume random numbers.
+    ema = ModelEMA(model, decay=ema_decay) if use_ema else None
+    ema_best_acc = -1.0
+    ema_best_epoch = 0
+    ema_history = []
+    if ema is not None:
+        print(f"-> EMA enabled: decay={ema.decay}; checkpoint={ema_save_path}")
+
     # Khởi tạo TensorBoard nếu có thư viện
     writer = None
     try:
@@ -258,7 +292,6 @@ def train_rgcn(args):
     best_epoch = 0
     patience_counter = args.patience
     os.makedirs("./model", exist_ok=True)
-    model_save_path = args.save_path or f"./model/{args.dataset}_rgcn_model_{seed}.pth"
 
     start_time = time.time()
 
@@ -278,6 +311,8 @@ def train_rgcn(args):
             loss = criterion(outputs, batch.y.float().view(-1, 1))
             loss.backward()
             optimizer.step()
+            if ema is not None:
+                ema.update(model)
 
             bsz = batch.num_graphs if hasattr(batch, 'num_graphs') else batch.y.size(0)
             total_train_samples += bsz
@@ -317,6 +352,43 @@ def train_rgcn(args):
         val_loss = val_epoch_loss / total_val_samples
         val_acc = val_correct / total_val_samples
 
+        if ema is not None:
+            # DataLoader iteration consumes RNG even when shuffle=False. Restore
+            # it so the extra validation pass cannot change raw training batches
+            # or dropout in the next epoch.
+            rng_devices = [torch.cuda.current_device()] if device.type == 'cuda' else []
+            with torch.random.fork_rng(devices=rng_devices), torch.no_grad():
+                ema.module.eval()
+                ema_loss_sum = 0.0
+                ema_correct = 0
+                ema_samples = 0
+                for batch in val_loader:
+                    batch = batch.to(device)
+                    ema_outputs = ema.module(batch)
+                    labels = batch.y.float().view(-1, 1)
+                    bsz = labels.size(0)
+                    ema_samples += bsz
+                    ema_loss_sum += criterion(ema_outputs, labels).item() * bsz
+                    ema_correct += ((ema_outputs >= 0.5).long() == labels).sum().item()
+            ema_val_acc = ema_correct / ema_samples
+            ema_val_loss = ema_loss_sum / ema_samples
+            if ema_val_acc >= ema_best_acc:
+                ema_best_acc = ema_val_acc
+                ema_best_epoch = epoch + 1
+                # Plain RGCN state_dict: no "module." prefix or EMA wrapper.
+                torch.save(ema.module.state_dict(), ema_save_path)
+            ema_history.append({
+                'epoch': epoch + 1,
+                'raw_val_accuracy': val_acc, 'raw_val_loss': val_loss,
+                'ema_val_accuracy': ema_val_acc, 'ema_val_loss': ema_val_loss,
+                'ema_updates': ema.num_updates,
+            })
+            print(f"[EMA epoch {epoch+1}] Val Loss: {ema_val_loss:.4f} | "
+                  f"Val Acc: {ema_val_acc:.4f} | Best: {ema_best_acc:.4f} (epoch {ema_best_epoch})")
+            if writer:
+                writer.add_scalar("Loss/val_ema", ema_val_loss, epoch)
+                writer.add_scalar("Acc/val_ema", ema_val_acc, epoch)
+
         print(f"[Epoch {epoch+1}] Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
 
         if writer:
@@ -343,17 +415,34 @@ def train_rgcn(args):
     if writer:
         writer.close()
 
+    if ema is not None:
+        print(f"-> Best EMA: {ema_best_acc:.4f} (epoch {ema_best_epoch}) -> {ema_save_path}")
+        summary_path = Path(ema_save_path).with_suffix('.json')
+        summary = {
+            'dataset': args.dataset, 'seed': seed, 'ema_decay': ema.decay,
+            'arguments': vars(args), 'threshold': 0.5,
+            'early_stopping': 'raw validation accuracy (unchanged)',
+            'raw_checkpoint': str(model_save_path), 'ema_checkpoint': str(ema_save_path),
+            'raw_best_epoch': best_epoch, 'raw_best_val_accuracy': val_max_acc,
+            'ema_best_epoch': ema_best_epoch, 'ema_best_val_accuracy': ema_best_acc,
+            'ema_updates': ema.num_updates, 'history': ema_history,
+        }
+        summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding='utf-8')
+        print(f"-> EMA training summary: {summary_path}")
+
     # 3. Đánh giá ngay trên tập kiểm thử Test nếu có
     if not args.no_test:
         test_path = f"./graph_data/{args.test_file}.pkl"
         if os.path.exists(test_path):
             print(f"\n--> Bắt đầu kiểm thử trên tập: {args.test_file} ...")
             evaluate_rgcn(model, model_save_path, test_path, device, args)
+            if ema is not None:
+                evaluate_rgcn(ema.module, ema_save_path, test_path, device, args, variant='ema')
         else:
             print(f"[Lưu ý] Không tìm thấy file {test_path} để tự động kiểm thử.")
 
 
-def evaluate_rgcn(model, model_path, test_file_path, device, args):
+def evaluate_rgcn(model, model_path, test_file_path, device, args, variant='raw'):
     """Đánh giá RGCN bằng mini-batch và ghi kết quả vào result/test_result.txt."""
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
@@ -404,7 +493,7 @@ def evaluate_rgcn(model, model_path, test_file_path, device, args):
     log_line = f"{args.test_file}\tacc: {test_acc:.4f}\tauc: {auc:.4f}\tf1: {test_f1:.4f}\tseed: {args.seed}\tmodel: {args.dataset}_rgcn_{args.num_layers}layer\t{datetime.now()}\n"
     
     with open("./result/test_result.txt", "a", encoding="utf-8") as f:
-        f.write(log_line)
+        f.write(log_line.rstrip('\n') + f"\tvariant: {variant}\tcheckpoint: {model_path}\n")
     print("-> Đã ghi nhật ký kết quả vào ./result/test_result.txt")
 
 
@@ -450,6 +539,13 @@ if __name__ == '__main__':
                         help="Không tự động chạy test sau khi huấn luyện xong")
     parser.add_argument('--cpu', action='store_true',
                         help="Bắt buộc sử dụng CPU thay vì GPU")
+
+    parser.add_argument('--ema', action='store_true',
+                        help="Enable EMA; save raw and EMA checkpoints separately")
+    parser.add_argument('--ema_decay', type=float, default=0.99,
+                        help="EMA decay per optimizer step (default: 0.99)")
+    parser.add_argument('--ema_save_path', type=str, default=None,
+                        help="EMA checkpoint path (default: raw checkpoint stem + _ema)")
 
     args = parser.parse_args()
     train_rgcn(args)

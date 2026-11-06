@@ -139,7 +139,8 @@ def create_pyg_data_list(graph_dict):
 
 
 def test_rgcn(test_file, dataset_name, seed, num_layers=2, num_bases=30,
-              input_dim=768, hidden_dim=256, output_dim=64, batch_size=32, do_save=False, cpu=False):
+              input_dim=768, hidden_dim=256, output_dim=64, batch_size=32, do_save=False, cpu=False,
+              checkpoint=None):
     seed = int(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
@@ -166,7 +167,8 @@ def test_rgcn(test_file, dataset_name, seed, num_layers=2, num_bases=30,
                               num_relations=num_relations, num_bases=num_bases).to(device)
 
     # Nạp trọng số mô hình
-    model_weight_path = f"./model/{dataset_name}_rgcn_model_{seed}.pth"
+    model_weight_path = checkpoint or f"./model/{dataset_name}_rgcn_model_{seed}.pth"
+    print(f"-> Checkpoint: {model_weight_path}")
     if not os.path.exists(model_weight_path):
         fallback_path = f"./model/{dataset_name}_gcn_model_{seed}.pth"
         if os.path.exists(fallback_path):
@@ -239,7 +241,7 @@ def test_rgcn(test_file, dataset_name, seed, num_layers=2, num_bases=30,
         os.makedirs("./result", exist_ok=True)
         log_line = f"{test_file}\tacc: {test_acc:.4f}\tauc: {auc:.4f}\tf1: {test_f1:.4f}\tseed: {seed}\tmodel: {dataset_name}_rgcn\t{datetime.now()}\n"
         with open("./result/test_result.txt", "a", encoding="utf-8") as f:
-            f.write(log_line)
+            f.write(log_line.rstrip('\n') + f"\tcheckpoint: {model_weight_path}\n")
         print("-> Đã lưu kết quả vào ./result/test_result.txt")
 
     return y_pred, test_pres
@@ -269,6 +271,9 @@ if __name__ == '__main__':
                         help="Lưu kết quả kiểm thử vào file text")
     parser.add_argument('--cpu', action='store_true', help="Chạy trên CPU")
 
+    parser.add_argument('--checkpoint', type=str, default=None,
+                        help="Explicit raw or EMA checkpoint path; default keeps the original RGCN path")
+
     args = parser.parse_args()
     test_rgcn(
         test_file=args.test_file,
@@ -281,5 +286,6 @@ if __name__ == '__main__':
         output_dim=args.output_dim,
         batch_size=args.batch_size,
         do_save=args.do_save,
-        cpu=args.cpu
+        cpu=args.cpu,
+        checkpoint=args.checkpoint
     )
