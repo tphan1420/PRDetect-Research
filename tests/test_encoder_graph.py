@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -52,6 +53,34 @@ class AlignmentTests(unittest.TestCase):
             source = Path(directory) / 'one.json'
             source.write_text('{}', encoding='utf-8')
             self.assertEqual(resolve_source(str(source)), source.resolve())
+
+    def test_dotted_split_names_keep_gpt35(self):
+        with tempfile.TemporaryDirectory() as directory:
+            previous = Path.cwd()
+            try:
+                os.chdir(directory)
+                for split in ['gpt3.5_mixed_test_split',
+                              'gpt3.5_mixed_test_adj_30_synonym_replace']:
+                    source = Path('data/original_text/benchmarks/gpt35_mixed') / (split + '.json')
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    source.write_text('{}', encoding='utf-8')
+                    for name in [split, split + '.json', str(source), str(source.resolve())[:-5]]:
+                        self.assertEqual(resolve_source(name), source.resolve())
+            finally:
+                os.chdir(previous)
+
+    def test_dotted_output_name_does_not_collide(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'graphs'
+            output = root / 'deberta_aligned' / 'gpt3.5_mixed_test_split.pkl'
+            output.parent.mkdir(parents=True)
+            output.touch()
+            source = Path(directory) / 'gpt3.5_mixed_test_split.json'
+            source.write_text('{}', encoding='utf-8')
+            with patch('sys.argv', ['builder', '--file', str(source)[:-5], '--graph-root', str(root)]):
+                with self.assertRaises(FileExistsError) as raised:
+                    main()
+            self.assertIn('gpt3.5_mixed_test_split.pkl', str(raised.exception))
 
     def test_graph_cap_counts_other_encoder_and_legacy_files(self):
         with tempfile.TemporaryDirectory() as directory:

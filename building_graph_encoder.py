@@ -18,10 +18,13 @@ ENCODERS = {
 
 def resolve_source(name):
     direct = Path(name)
-    for candidate in (direct, direct.with_suffix('.json')):
+    # A split name may contain a dot (gpt3.5_*). Only remove a literal
+    # .json suffix; Path.stem/with_suffix would otherwise truncate at .5_*.
+    json_path = direct if direct.name.endswith('.json') else Path(str(direct) + '.json')
+    for candidate in (direct, json_path):
         if candidate.is_file():
             return candidate.resolve()
-    stem = direct.stem
+    stem = direct.name[:-5] if direct.name.endswith('.json') else direct.name
     found = sorted(Path('data/original_text').rglob(stem + '.json'))
     found += sorted(Path('data/perturbed_text').rglob(stem + '.json'))
     if len(found) != 1:
@@ -202,7 +205,8 @@ def main():
     root = args.graph_root.resolve()
     output = root / (args.encoder + '_aligned')
     output.mkdir(parents=True, exist_ok=True)
-    jobs = [(resolve_source(name), output / (Path(name).stem + '.pkl')) for name in args.file]
+    sources = [resolve_source(name) for name in args.file]
+    jobs = [(source, output / (source.stem + '.pkl')) for source in sources]
     if len({target for _, target in jobs}) != len(jobs):
         raise ValueError('Duplicate graph output names.')
     for _, target in jobs:
