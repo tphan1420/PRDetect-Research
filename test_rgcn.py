@@ -8,6 +8,8 @@ import sys
 import time
 import pickle
 import argparse
+import json
+from pathlib import Path
 from datetime import datetime
 
 if sys.platform == "win32":
@@ -108,6 +110,7 @@ except ImportError:
 
 from model.RGCN import RGCN2, RGCN4, RelationalGCN
 from dep_vocab import get_default_vocab
+from encoder_graph import check_checkpoint_graph
 
 
 def create_pyg_data_list(graph_dict):
@@ -139,7 +142,8 @@ def create_pyg_data_list(graph_dict):
 
 
 def test_rgcn(test_file, dataset_name, seed, num_layers=2, num_bases=30,
-              input_dim=768, hidden_dim=256, output_dim=64, batch_size=32, do_save=False, cpu=False):
+              input_dim=768, hidden_dim=256, output_dim=64, batch_size=32, do_save=False, cpu=False,
+              checkpoint=None, graph_dir='./graph_data', result_dir='./result', report_json=None):
     seed = int(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
@@ -166,7 +170,8 @@ def test_rgcn(test_file, dataset_name, seed, num_layers=2, num_bases=30,
                               num_relations=num_relations, num_bases=num_bases).to(device)
 
     # Nạp trọng số mô hình
-    model_weight_path = f"./model/{dataset_name}_rgcn_model_{seed}.pth"
+    model_weight_path = checkpoint or f"./model/{dataset_name}_rgcn_model_{seed}.pth"
+    print(f'-> Checkpoint: {model_weight_path}')
     if not os.path.exists(model_weight_path):
         fallback_path = f"./model/{dataset_name}_gcn_model_{seed}.pth"
         if os.path.exists(fallback_path):
@@ -178,12 +183,16 @@ def test_rgcn(test_file, dataset_name, seed, num_layers=2, num_bases=30,
 
     clean_test_file = test_file[:-4] if test_file.endswith(".pkl") else test_file
     clean_test_file = os.path.basename(clean_test_file)
-    graph_file_path = f"./graph_data/{clean_test_file}.pkl"
+    graph_file_path = str(Path(graph_dir) / f"{clean_test_file}.pkl")
     if not os.path.exists(graph_file_path):
         raise FileNotFoundError(f"Không tìm thấy file đồ thị tại: {graph_file_path}")
 
     with open(graph_file_path, "rb") as f:
         test_data = pickle.load(f)
+    check_checkpoint_graph(model_weight_path, test_data, input_dim, num_relations)
+    metadata = test_data.get('encoder_metadata')
+    if metadata is not None and metadata['configuration']['dependency_vocabulary'] != vocab.dep2id:
+        raise ValueError('Graph dependency vocabulary differs from current dep_vocab.')
 
     if "all_edge_type" not in test_data:
         print("[Cảnh báo] File đồ thị không có 'all_edge_type', tự động tạo edge_type=0 (fallback).")
@@ -192,6 +201,8 @@ def test_rgcn(test_file, dataset_name, seed, num_layers=2, num_bases=30,
         ]
 
     test_len = len(test_data['y'])
+    if test_len == 0:
+        raise ValueError('Test graph must not be empty.')
     test_dataset = create_pyg_data_list(test_data)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
@@ -236,11 +247,34 @@ def test_rgcn(test_file, dataset_name, seed, num_layers=2, num_bases=30,
     print(f"  * F1-score:  {test_f1:.4f}")
 
     if do_save:
-        os.makedirs("./result", exist_ok=True)
+        Path(result_dir).mkdir(parents=True, exist_ok=True)
         log_line = f"{test_file}\tacc: {test_acc:.4f}\tauc: {auc:.4f}\tf1: {test_f1:.4f}\tseed: {seed}\tmodel: {dataset_name}_rgcn\t{datetime.now()}\n"
-        with open("./result/test_result.txt", "a", encoding="utf-8") as f:
-            f.write(log_line)
-        print("-> Đã lưu kết quả vào ./result/test_result.txt")
+        with (Path(result_dir) / 'test_result.txt').open('a', encoding='utf-8') as f:
+            f.write(log_line.rstrip('\n') + f'\tcheckpoint: {model_weight_path}\tgraph: {graph_file_path}\n')
+        print(f"-> Test log: {Path(result_dir) / 'test_result.txt'}")
+
+    if report_json:
+        truth = test_data['y'].view(-1).cpu().tolist()
+        matrix = [[0, 0], [0, 0]]
+        for actual, predicted in zip(truth, y_pred):
+            matrix[int(actual)][predicted] += 1
+        def recall(label):
+            count = sum(matrix[label])
+            return matrix[label][label] / count if count else None
+        report = {
+            'split': clean_test_file, 'dataset': dataset_name, 'seed': seed,
+            'checkpoint': str(model_weight_path), 'graph': graph_file_path,
+            'encoder_metadata': metadata, 'threshold': 0.5, 'samples': test_len,
+            'accuracy': test_acc, 'auc': auc, 'f1': test_f1, 'loss': test_loss,
+            'label_convention': {'0': 'ai', '1': 'human'},
+            'confusion_matrix_rows_true_columns_pred': matrix,
+            'recall_ai': recall(0), 'recall_human': recall(1),
+            'predicted_human': sum(y_pred), 'y_true': truth, 'p_human': test_pres,
+        }
+        destination = Path(report_json)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+        print(f'-> Detailed test report: {destination}')
 
     return y_pred, test_pres
 
@@ -269,6 +303,11 @@ if __name__ == '__main__':
                         help="Lưu kết quả kiểm thử vào file text")
     parser.add_argument('--cpu', action='store_true', help="Chạy trên CPU")
 
+    parser.add_argument('--checkpoint', default=None, help='Explicit RGCN state_dict checkpoint')
+    parser.add_argument('--graph_dir', default='./graph_data', help='Graph cache directory')
+    parser.add_argument('--result_dir', default='./result', help='Test result log directory')
+    parser.add_argument('--report_json', default=None, help='Save metrics, confusion matrix and per-sample scores')
+
     args = parser.parse_args()
     test_rgcn(
         test_file=args.test_file,
@@ -281,5 +320,9 @@ if __name__ == '__main__':
         output_dim=args.output_dim,
         batch_size=args.batch_size,
         do_save=args.do_save,
-        cpu=args.cpu
+        cpu=args.cpu,
+        checkpoint=args.checkpoint,
+        graph_dir=args.graph_dir,
+        result_dir=args.result_dir,
+        report_json=args.report_json
     )

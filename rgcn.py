@@ -12,6 +12,8 @@ import sys
 import time
 import pickle
 import argparse
+import json
+from pathlib import Path
 from datetime import datetime
 
 if sys.platform == "win32":
@@ -115,6 +117,7 @@ except ImportError:
 
 from model.RGCN import RGCN2, RGCN4, RelationalGCN
 from dep_vocab import get_default_vocab
+from encoder_graph import check_graph_pair, check_checkpoint_graph, checkpoint_manifest_path
 
 
 def load_graph_data(file_path):
@@ -163,6 +166,8 @@ def create_pyg_data_list(graph_dict):
 
 
 def train_rgcn(args):
+    if args.epochs < 1:
+        raise ValueError('epochs must be at least 1.')
     # Thiết lập Random Seed
     seed = int(args.seed)
     torch.manual_seed(seed)
@@ -180,16 +185,24 @@ def train_rgcn(args):
     num_relations = args.num_relations or vocab.num_relations
     print(f"-> Số loại quan hệ cú pháp (num_relations): {num_relations}")
 
-    train_path = f"./graph_data/{args.train_file}.pkl"
-    val_path = f"./graph_data/{args.val_file}.pkl"
+    graph_dir = Path(getattr(args, 'graph_dir', './graph_data'))
+    train_path = graph_dir / f"{args.train_file}.pkl"
+    val_path = graph_dir / f"{args.val_file}.pkl"
 
     print(f"-> Đang nạp dữ liệu huấn luyện: {train_path}")
     train_data = load_graph_data(train_path)
     print(f"-> Đang nạp dữ liệu kiểm định: {val_path}")
     val_data = load_graph_data(val_path)
+    encoder_metadata = check_graph_pair(train_data, val_data, args.input_dim, num_relations)
+    if encoder_metadata is not None:
+        if encoder_metadata['configuration']['dependency_vocabulary'] != vocab.dep2id:
+            raise ValueError('Graph dependency vocabulary differs from current dep_vocab.')
+        print(f"-> Encoder: {encoder_metadata['configuration']['encoder']} (frozen)")
 
     train_len = len(train_data['y'])
     val_len = len(val_data['y'])
+    if train_len == 0 or val_len == 0:
+        raise ValueError('Train and validation graphs must not be empty.')
     print(f"-> Số mẫu Train: {train_len} | Số mẫu Val: {val_len}")
 
     print(f"-> Đang chuẩn bị DataLoader Mini-Batching (batch_size={args.batch_size}) ...")
@@ -259,6 +272,8 @@ def train_rgcn(args):
     patience_counter = args.patience
     os.makedirs("./model", exist_ok=True)
     model_save_path = args.save_path or f"./model/{args.dataset}_rgcn_model_{seed}.pth"
+    Path(model_save_path).parent.mkdir(parents=True, exist_ok=True)
+    history = []
 
     start_time = time.time()
 
@@ -316,6 +331,8 @@ def train_rgcn(args):
 
         val_loss = val_epoch_loss / total_val_samples
         val_acc = val_correct / total_val_samples
+        history.append({'epoch': epoch + 1, 'train_loss': train_loss, 'train_accuracy': train_acc,
+                        'val_loss': val_loss, 'val_accuracy': val_acc})
 
         print(f"[Epoch {epoch+1}] Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
 
@@ -331,6 +348,12 @@ def train_rgcn(args):
             best_epoch = epoch + 1
             patience_counter = args.patience
             torch.save(model.state_dict(), model_save_path)
+            # Plain state_dict remains compatible with the original model class.
+            checkpoint_manifest_path(model_save_path).write_text(json.dumps({
+                'encoder_metadata': encoder_metadata,
+                'arguments': vars(args), 'best_epoch': best_epoch,
+                'best_val_accuracy': val_max_acc, 'threshold': 0.5,
+            }, ensure_ascii=False, indent=2), encoding='utf-8')
             print(f"  --> [LƯU MÔ HÌNH TỐT NHẤT] Epoch {best_epoch} - Val Acc: {val_max_acc:.4f} -> {model_save_path}")
         else:
             patience_counter -= 1
@@ -342,10 +365,14 @@ def train_rgcn(args):
     print(f"\n[Hoàn thành huấn luyện] Tổng thời gian: {total_time:.2f}s | Val Acc cao nhất: {val_max_acc:.4f} (Epoch {best_epoch})")
     if writer:
         writer.close()
+    Path(str(model_save_path) + '.train.json').write_text(json.dumps({
+        'arguments': vars(args), 'best_epoch': best_epoch,
+        'best_val_accuracy': val_max_acc, 'history': history,
+    }, ensure_ascii=False, indent=2), encoding='utf-8')
 
     # 3. Đánh giá ngay trên tập kiểm thử Test nếu có
     if not args.no_test:
-        test_path = f"./graph_data/{args.test_file}.pkl"
+        test_path = graph_dir / f"{args.test_file}.pkl"
         if os.path.exists(test_path):
             print(f"\n--> Bắt đầu kiểm thử trên tập: {args.test_file} ...")
             evaluate_rgcn(model, model_save_path, test_path, device, args)
@@ -359,6 +386,8 @@ def evaluate_rgcn(model, model_path, test_file_path, device, args):
     model.eval()
 
     test_data = load_graph_data(test_file_path)
+    check_checkpoint_graph(model_path, test_data, args.input_dim,
+                           args.num_relations or get_default_vocab().num_relations)
     test_len = len(test_data['y'])
     test_dataset = create_pyg_data_list(test_data)
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
@@ -400,12 +429,13 @@ def evaluate_rgcn(model, model_path, test_file_path, device, args):
     print(f"  * ROC-AUC:  {auc:.4f}")
     print(f"  * F1-score: {test_f1:.4f}")
 
-    os.makedirs("./result", exist_ok=True)
+    result_dir = Path(getattr(args, 'result_dir', './result'))
+    result_dir.mkdir(parents=True, exist_ok=True)
     log_line = f"{args.test_file}\tacc: {test_acc:.4f}\tauc: {auc:.4f}\tf1: {test_f1:.4f}\tseed: {args.seed}\tmodel: {args.dataset}_rgcn_{args.num_layers}layer\t{datetime.now()}\n"
     
-    with open("./result/test_result.txt", "a", encoding="utf-8") as f:
-        f.write(log_line)
-    print("-> Đã ghi nhật ký kết quả vào ./result/test_result.txt")
+    with (result_dir / 'test_result.txt').open('a', encoding='utf-8') as f:
+        f.write(log_line.rstrip('\n') + f'\tcheckpoint: {model_path}\tgraph: {test_file_path}\n')
+    print(f"-> Test log: {result_dir / 'test_result.txt'}")
 
 
 if __name__ == '__main__':
@@ -450,6 +480,10 @@ if __name__ == '__main__':
                         help="Không tự động chạy test sau khi huấn luyện xong")
     parser.add_argument('--cpu', action='store_true',
                         help="Bắt buộc sử dụng CPU thay vì GPU")
+
+    parser.add_argument('--graph_dir', default='./graph_data',
+                        help='Graph cache directory; use a separate directory per encoder')
+    parser.add_argument('--result_dir', default='./result', help='Test result log directory')
 
     args = parser.parse_args()
     train_rgcn(args)
