@@ -1,0 +1,6 @@
+# Reuse the Kaggle GPU PyTorch installation; do not replace it with old wheels.
+numpy>=1.26
+transformers==4.44.2
+spacy>=3.8,<3.9
+scikit-learn>=1.4
+tqdm
