@@ -82,6 +82,22 @@ def parent_array(n, src, dst, et, R, mode):
         raise ValueError("Directed structural mapping requires at most one non-self parent edge per node")
     par = -np.ones(n, dtype=np.int64)
     par[src[m]] = dst[m]
+    if mode == "directed":
+        # A parsed dependency document is a forest (possibly with one root
+        # per sentence).  Reject cycles before struct_features would cap a
+        # non-terminating walk at MAXD and turn malformed input into features.
+        state = np.zeros(n, dtype=np.int8)  # 0 unseen, 1 current walk, 2 done
+        for start in range(n):
+            if state[start]:
+                continue
+            trail, current = [], start
+            while current >= 0 and state[current] == 0:
+                state[current] = 1
+                trail.append(current)
+                current = par[current]
+            if current >= 0 and state[current] == 1:
+                raise ValueError("Directed structural mapping requires an acyclic parent forest")
+            state[trail] = 2
     return par, int(m.sum()), np.unique(src[m]).size
 
 
