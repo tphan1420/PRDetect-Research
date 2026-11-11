@@ -1,4 +1,4 @@
-"""Test Quang's existing V3 checkpoints; never train or extract code from Markdown.
+"""Test Quang's V3 or controlled baseline/CMixStyle checkpoints; never train.
 
 The orchestrator uses only the standard library. Graph building and inference
 run in separate processes so the frozen encoder and multiple classifiers never
@@ -38,6 +38,14 @@ class Case:
 
 
 def benchmark_cases(suite="all"):
+    table2 = [Case(
+        "table2", "Original", 0,
+        "data/original_text/benchmarks/hc3/hc3_test.json",
+    )] + [Case(
+        "table2", f"Synonym {rate}%", rate,
+        "data/perturbed_text/hc3/lexical_synonym/"
+        f"hc3_test_adj_{rate}_synonym_replace.json",
+    ) for rate in (5, 10, 20, 30)]
     table3 = [Case(
         "table3", "Original", 0,
         "data/original_text/benchmarks/gpt35_mixed/gpt3.5_mixed_test_split.json",
@@ -53,6 +61,10 @@ def benchmark_cases(suite="all"):
         "table4", f"{kind.capitalize()} 25%", 25,
         f"data/perturbed_text/hc3/structural_noise/hc3_test_{kind}_25.json",
     ) for kind in ("insert", "repeat", "replace", "delete")]
+    if suite == "table2":
+        return table2
+    if suite == "full":
+        return table2 + table3 + table4
     if suite == "table3":
         return table3
     if suite == "table4":
@@ -93,7 +105,7 @@ def environment():
     return result
 
 
-def find_checkpoints(root, seeds):
+def find_checkpoints(root, seeds, variant="quang"):
     root = Path(root).resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"Checkpoint directory does not exist: {root}")
@@ -101,11 +113,17 @@ def find_checkpoints(root, seeds):
         raise ValueError("Provide at least one seed, without duplicates")
     found = {}
     for seed in seeds:
-        stem = f"p3fin_V1_swap_s{seed}_seed{seed}"
-        paths = sorted(p for p in root.rglob(stem + ".*")
-                       if p.is_file() and p.suffix.lower() in (".pt", ".pth", ".zip"))
+        if variant not in ("quang", "baseline", "cmixstyle"):
+            raise ValueError(f"Unknown V3 variant: {variant}")
+        stem = (f"p3fin_V1_swap_s{seed}_seed{seed}" if variant == "quang"
+                else f"v3_{variant}_seed{seed}")
+        # Kaggle preserves some uploaded PyTorch checkpoints without a file
+        # extension (for example ``p3fin_V1_swap_s2021_seed2021``).  PyTorch
+        # identifies checkpoints from their contents, not their suffix.
+        paths = sorted(p for p in root.rglob(stem + "*")
+                       if p.is_file() and p.name in (stem, stem + ".pt", stem + ".pth", stem + ".zip"))
         if not paths:
-            raise FileNotFoundError(f"No {stem}.pt/.pth/.zip under {root}")
+            raise FileNotFoundError(f"No {stem} (or .pt/.pth/.zip) under {root}")
         if len({sha256(path) for path in paths}) != 1:
             raise ValueError(f"Conflicting checkpoint copies for seed {seed}: {paths}")
         found[str(seed)] = str(paths[0])
@@ -113,18 +131,24 @@ def find_checkpoints(root, seeds):
 
 
 def make_config(args):
-    paths = find_checkpoints(args.checkpoint_dir, args.seeds)
-    files = (MODEL_SOURCE, REPO / "building_graph.py", REPO / "dep_vocab.py",
-             REPO / "dep_vocab.json")
+    variant = args.variant
+    paths = find_checkpoints(args.checkpoint_dir, args.seeds, variant)
+    files = [MODEL_SOURCE, REPO / "building_graph.py", REPO / "dep_vocab.py",
+             REPO / "dep_vocab.json"]
+    if variant != "quang":
+        files += [REPO / "model/V3CMixStyle.py", REPO / "model/v3_mixstyle.py"]
     return {
-        "model": "Quang_v3_V1_swap", "train": "hc3", "seeds": args.seeds,
+        "model": "Quang_v3_V1_swap" if variant == "quang" else f"v3_{variant}",
+        "variant": variant, "train": "hc3", "seeds": args.seeds,
         "checkpoint_paths": paths,
         "checkpoint_sha256": {s: sha256(p) for s, p in paths.items()},
         "code_sha256": {str(p.relative_to(REPO)): sha256(p) for p in files if p.is_file()},
         "batch_size": args.batch_size, "device": args.device,
         "struct_mode": args.struct_mode,
-        "struct_mode_note": "Checkpoint does not store mode; fixed CLI value, not inferred from test.",
+        "struct_mode_note": ("Legacy checkpoint does not store mode; fixed CLI value, not inferred from test."
+                             if variant == "quang" else "Must match the explicit mode stored during training."),
         "threshold": 0.5, "ensemble": False, "environment": environment(),
+        "graph_budget_root": args.graph_budget_root,
     }
 
 
@@ -135,22 +159,39 @@ def _load_model(config, seed, device):
     path = Path(config["checkpoint_paths"][str(seed)])
     if sha256(path) != config["checkpoint_sha256"][str(seed)]:
         raise ValueError(f"Checkpoint changed: {path}")
-    if sha256(MODEL_SOURCE) != config["code_sha256"]["model/QuangV3.py"]:
-        raise ValueError("V3 model source changed; start a new run")
+    for name, expected_hash in config["code_sha256"].items():
+        if sha256(REPO / name) != expected_hash:
+            raise ValueError(f"Source changed: {name}; start a new run")
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     if not {"state", "args", "R", "gm", "gs", "thr"} <= checkpoint.keys():
         raise ValueError(f"Not a Quang V3 checkpoint: {path}")
     a = checkpoint["args"]
     if a["train_file"] != "hc3_train" or a["seeds"] != [seed]:
         raise ValueError(f"Checkpoint training dataset/seed mismatch: {path}")
-    if a.get("aug") != "swap" or a.get("cons", 0) != 0:
-        raise ValueError(f"Expected V1_swap without consistency: {path}")
+    variant = config.get("variant", "quang")
+    extra = {}
+    if variant == "quang":
+        if a.get("aug") != "swap" or a.get("cons", 0) != 0:
+            raise ValueError(f"Expected V1_swap without consistency: {path}")
+        if checkpoint.get("method") in ("v3_baseline", "v3_cmixstyle"):
+            raise ValueError("New ablation checkpoint requires its explicit --variant")
+    else:
+        if checkpoint.get("method") != f"v3_{variant}":
+            raise ValueError(f"Checkpoint/variant mismatch: {path}")
+        if checkpoint.get("training_complete") is not True:
+            raise ValueError(f"Training did not complete: {path}; saved best epoch is incomplete")
+        if checkpoint.get("struct_mode") != config["struct_mode"]:
+            raise ValueError("--struct-mode differs from the checkpoint training mode")
+        if variant == "cmixstyle":
+            from model.V3CMixStyle import CMixStyleNet
+            Net = CMixStyleNet
+            extra = {f"mixstyle_{k}": v for k, v in checkpoint["mixstyle"].items()}
     model = Net(
         int(checkpoint["R"]), d=a["hidden"], nb=a["num_bases"], L=a["layers"],
         p=a["dropout"], p_in=a["in_dropout"], edge_drop=a["edge_drop"],
         use_struct=bool(a["struct"]), use_gfeat=bool(a["gfeat"]),
         readout=a["readout"], aug=a.get("aug", "none"),
-        aug_max=a.get("aug_max", 0.35), mode=config["struct_mode"],
+        aug_max=a.get("aug_max", 0.35), mode=config["struct_mode"], **extra,
     )
     model.load_state_dict(checkpoint["state"], strict=True)
     return path, checkpoint, model.to(device).eval()
@@ -168,6 +209,9 @@ def inspect_checkpoints(config):
             "R": int(checkpoint["R"]), "validation_threshold": float(checkpoint["thr"]),
             "arguments": checkpoint["args"], "struct_mode_used": config["struct_mode"],
             "parameters": sum(p.numel() for p in model.parameters()),
+            "method": checkpoint.get("method", "Quang_v3_V1_swap"),
+            "mixstyle": checkpoint.get("mixstyle"),
+            "best_epoch": checkpoint.get("best_epoch"),
         }
         rows.append(row)
         print(f"Seed {seed}: strict load OK | R={row['R']} | "
@@ -324,6 +368,8 @@ def evaluate_case(case, config, config_path, work_dir, max_graphs, force=False):
     else:
         roots = {graph_dir, REPO / "graph_data", REPO / "TacGia/PRDetect/graph_data",
                  work_dir.parent / "paper_table4_original/graph_data"}
+        if config.get("graph_budget_root"):
+            roots.add(Path(config["graph_budget_root"]))
         existing = {p.resolve() for root in roots if root.exists() for p in root.rglob("*.pkl")}
         if len(existing) >= max_graphs:
             raise ValueError(f"Graph limit {max_graphs} reached; clean unused caches first: "
@@ -414,6 +460,10 @@ def export_archive(results, archive, cases, seeds, extra_cases=()):
             output.write(path, str(Path("result") / path.relative_to(results)))
         output.write(Path(__file__), "evaluate_v3_quang.py")
         output.write(MODEL_SOURCE, "model/QuangV3.py")
+        for relative in ("model/V3CMixStyle.py", "model/v3_mixstyle.py", "train_v3.py"):
+            source = REPO / relative
+            if source.is_file():
+                output.write(source, relative)
 
 
 def run_benchmarks(args):
@@ -429,8 +479,8 @@ def run_benchmarks(args):
     config_path = work / "config.json"
     write_json(config_path, config)
     print("No training. Fixed threshold 0.5; validation thresholds reported separately.", flush=True)
-    print("WARNING: checkpoint does not store structural mode; using "
-          f"{args.struct_mode!r}. Verify clean HC3 reproduction.", flush=True)
+    print(f"Variant {args.variant}, structural mode {args.struct_mode!r}. "
+          + config["struct_mode_note"], flush=True)
     run_child("inspect", "--config", config_path, "--output", results / "checkpoint_metadata.json")
 
     execution = list(cases)
@@ -443,8 +493,9 @@ def run_benchmarks(args):
             extra_cases.append(clean)
         evaluate_case(clean, config, config_path, work, args.max_graphs, args.force)
         mean = statistics.mean(read_json(report_path(results, clean, s))["accuracy"] for s in args.seeds)
-        print(f"HC3 Original mean: {mean:.4f}; Quang report (5 seeds): 0.9902", flush=True)
-        if sorted(args.seeds) == DEFAULT_SEEDS and abs(mean - 0.9902) > args.clean_tolerance:
+        print(f"HC3 Original mean: {mean:.4f}", flush=True)
+        if (args.variant == "quang" and sorted(args.seeds) == DEFAULT_SEEDS
+                and abs(mean - 0.9902) > args.clean_tolerance):
             raise ValueError("Clean HC3 differs substantially from Quang's report. Check parser, "
                              "graph vocabulary and --struct-mode; do not tune on test. "
                              "--skip-clean-check is an explicit diagnostic override only.")
@@ -457,7 +508,9 @@ def run_benchmarks(args):
                 "clean_check_skipped": args.skip_clean_check,
                 "std_definition": "sample standard deviation across seeds (ddof=1)"}
     write_json(results / "manifest.json", manifest)
-    archive = work / "v3_quang_table3_table4_results.zip"
+    name = ("v3_quang_table3_table4_results.zip" if args.variant == "quang" and args.suite == "all"
+            else f"v3_{args.variant}_{args.suite}_results.zip")
+    archive = work / name
     export_archive(results, archive, cases, args.seeds, extra_cases)
     print(f"Results: {results}\nArchive: {archive}", flush=True)
 
@@ -474,16 +527,19 @@ def build_parser():
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("inspect", "run"):
         p = sub.add_parser(command)
+        p.add_argument("--variant", choices=("quang", "baseline", "cmixstyle"), default="quang")
         p.add_argument("--checkpoint-dir", default=str(REPO / "model/V3_quang"))
         p.add_argument("--seeds", type=int, nargs="+", default=DEFAULT_SEEDS)
         p.add_argument("--batch-size", type=positive_int, default=4)
         p.add_argument("--struct-mode", choices=("low", "high"), default="low")
         p.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
+        p.add_argument("--graph-budget-root", help="Also count caches recursively under this workflow root")
         if command == "inspect":
             p.add_argument("--config")
             p.add_argument("--output")
         else:
-            p.add_argument("--suite", choices=("all", "table3", "table4"), default="all")
+            p.add_argument("--suite", choices=("all", "table2", "table3", "table4", "full"), default="all",
+                           help="all: legacy Tables 3+4; full: Tables 2(HC3)+3(HC3->GPT3.5)+4")
             p.add_argument("--work-dir", default=str(REPO / "result/v3_quang_eval"))
             p.add_argument("--max-graphs", type=positive_int, default=4)
             p.add_argument("--force", action="store_true", help="Rerun reports; do not reuse old predictions")

@@ -2,7 +2,8 @@
 
 Source: docs/PRDetect_RGCN_v3_tong_hop.md (rgcn_plus.py).
 Preserves the checkpoint architecture, legacy relation-half assumptions,
-feature conversion and clipping. No training, R-Drop or architecture changes.
+feature conversion and clipping. Optional feature_transform is an identity
+extension point unless explicitly supplied by an experimental subclass.
 Use evaluate_v3_quang.py; mode is not stored in the supplied checkpoints.
 """
 
@@ -280,7 +281,7 @@ class Net(nn.Module):
             x_new = torch.where(use_mask.unsqueeze(1), self.mask_emb.to(x.dtype).unsqueeze(0).expand_as(x), x_new)
         return x_new
 
-    def forward(self, b, aug_mode=None, gen=None):
+    def forward(self, b, aug_mode=None, gen=None, feature_transform=None):
         x, src, dst, rel, bidx, B = b["x"], b["src"], b["dst"], b["rel"], b["bidx"], b["B"]
         N = x.size(0)
         if aug_mode and aug_mode != "none":
@@ -292,6 +293,8 @@ class Net(nn.Module):
         cnt = torch.bincount(key, minlength=N * self.R).float()
         norm = 1.0 / cnt[key].clamp(min=1.0)
         h = self.ln0(self.proj(self.drop_in(x)))
+        if feature_transform is not None:
+            h = feature_transform(h, b)
         if self.use_struct:
             st = b["st"]
             s = torch.cat([self.e_dep(st[:, 0]), self.e_chi(st[:, 1]), self.e_dis(st[:, 2])], 1)

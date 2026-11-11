@@ -56,6 +56,18 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaises(Exception):
             runner.positive_int("0")
 
+    def test_new_suites_and_variant_discovery_do_not_mix_checkpoints(self):
+        self.assertEqual(len(runner.benchmark_cases("full")), 15)
+        self.assertEqual(len(runner.benchmark_cases("table2")), 5)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for variant in ("baseline", "cmixstyle"):
+                checkpoint = root / f"v3_{variant}_seed2025.pt"
+                checkpoint.write_bytes(variant.encode())
+                self.assertEqual(runner.find_checkpoints(root, [2025], variant)["2025"], str(checkpoint))
+            with self.assertRaises(FileNotFoundError):
+                runner.find_checkpoints(root, [2025], "quang")
+
     def test_help_does_not_require_torch(self):
         result = subprocess.run(
             [sys.executable, str(runner.REPO / "evaluate_v3_quang.py"), "run", "--help"],
@@ -63,7 +75,7 @@ class ConfigurationTests(unittest.TestCase):
         )
         self.assertIn("--checkpoint-dir", result.stdout)
 
-    def test_zip_checkpoints_are_discovered_without_extraction(self):
+    def test_checkpoints_are_discovered_without_extraction_or_extension(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             path = root / "p3fin_V1_swap_s2025_seed2025.zip"
@@ -81,6 +93,14 @@ class ConfigurationTests(unittest.TestCase):
             (copy / path.name).write_bytes(b"different checkpoint")
             with self.assertRaises(ValueError):
                 runner.find_checkpoints(root, [2025])
+
+    def test_extensionless_kaggle_checkpoint_is_discovered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "p3fin_V1_swap_s2021_seed2021"
+            path.write_bytes(b"extensionless PyTorch checkpoint fixture")
+            found = runner.find_checkpoints(root, [2021])
+            self.assertEqual(found["2021"], str(path))
 
     def test_report_identity_and_incomplete_json(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -205,6 +225,23 @@ class ConfigurationTests(unittest.TestCase):
         port = ast.parse(runner.MODEL_SOURCE.read_text(encoding="utf-8"))
         for node in port.body:
             if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                if node.name == "Net":
+                    # The only permitted departure from the original code is
+                    # the opt-in transform between ln0 and structural addition.
+                    forward = next(n for n in node.body if isinstance(n, ast.FunctionDef) and n.name == "forward")
+                    self.assertEqual(forward.args.args[-1].arg, "feature_transform")
+                    self.assertIsInstance(forward.args.defaults[-1], ast.Constant)
+                    self.assertIsNone(forward.args.defaults[-1].value)
+                    forward.args.args.pop()
+                    forward.args.defaults.pop()
+                    hook = next(n for n in forward.body if isinstance(n, ast.If)
+                                and isinstance(n.test, ast.Compare)
+                                and isinstance(n.test.left, ast.Name)
+                                and n.test.left.id == "feature_transform")
+                    self.assertEqual(ast.dump(hook), ast.dump(ast.parse(
+                        "if feature_transform is not None:\n    h = feature_transform(h, b)"
+                    ).body[0]))
+                    forward.body.remove(hook)
                 self.assertEqual(ast.dump(node), ast.dump(ref[node.name]), node.name)
 
 
