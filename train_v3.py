@@ -20,14 +20,14 @@ from evaluate_v3_quang import (REPO, TRAINING_DOMAINS, environment, positive_int
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variants", nargs="+", choices=("baseline", "classswap", "restricted", "cmixstyle"),
+    parser.add_argument("--variants", nargs="+", choices=("baseline", "classswap", "restricted", "cmixstyle", "structmap"),
                         default=["baseline", "cmixstyle"])
     parser.add_argument("--seeds", type=int, nargs="+", default=[2025, 2026])
     parser.add_argument("--graph-dir", type=Path, default=REPO / "graph_data")
     parser.add_argument("--output-dir", type=Path, default=REPO / "result/v3_cmixstyle/model")
     parser.add_argument("--train-file", default="hc3_train")
     parser.add_argument("--val-file", default="hc3_val")
-    parser.add_argument("--struct-mode", choices=("low", "high"), default="low")
+    parser.add_argument("--struct-mode", choices=("low", "high", "directed"), default="low")
     parser.add_argument("--num-rel", type=int, default=0, help="0: infer from training graph only")
     parser.add_argument("--hidden", type=positive_int, default=384)
     parser.add_argument("--num-bases", type=positive_int, default=12)
@@ -84,6 +84,10 @@ def validate_args(args):
         raise ValueError("Invalid weight decay, EMA decay or relation count")
     if args.micro_batch_size > args.batch_size:
         raise ValueError("micro-batch-size must not exceed batch-size")
+    if "structmap" in args.variants and args.struct_mode != "directed":
+        raise ValueError("Corrected Structural Mapping requires --struct-mode directed")
+    if args.struct_mode == "directed" and set(args.variants) != {"structmap"}:
+        raise ValueError("--struct-mode directed is reserved for the structmap variant")
     if "cmixstyle" in args.variants:
         if args.aug == "none":
             raise ValueError("CMixStyle is applied to the existing augmented branch; --aug cannot be none")
@@ -109,6 +113,7 @@ def build_model(args, variant, R):
     from model.V3ClassSwap import ClassPreservingSyntaxSwapNet
     from model.V3CMixStyle import CMixStyleNet
     from model.V3Restricted import StructureGuidedRestrictedNet
+    from model.V3StructuralMap import CorrectedStructuralMappingNet
 
     kwargs = dict(d=args.hidden, nb=args.num_bases, L=args.layers, p=args.dropout,
                   p_in=args.in_dropout, edge_drop=args.edge_drop,
@@ -116,6 +121,8 @@ def build_model(args, variant, R):
                   readout=args.readout, aug=args.aug, aug_max=args.aug_max, mode=args.struct_mode)
     if variant == "baseline":
         return Net(R, **kwargs)
+    if variant == "structmap":
+        return CorrectedStructuralMappingNet(R, **kwargs)
     if variant == "classswap":
         return ClassPreservingSyntaxSwapNet(R, **kwargs)
     if variant == "restricted":
@@ -196,11 +203,11 @@ def signature(args, variant, seed, data_hashes):
     config = vars(args).copy()
     for key in ("variants", "seeds", "output_dir", "graph_dir", "skip_completed", "overwrite"):
         config.pop(key)
-    if variant in ("baseline", "classswap", "restricted"):
+    if variant in ("baseline", "classswap", "restricted", "structmap"):
         for key in ("mixstyle_p", "mixstyle_alpha", "mixstyle_strength"):
             config.pop(key)
     code = {str(p.relative_to(REPO)): sha256(p) for p in (
-        Path(__file__), REPO / "model/QuangV3.py", REPO / "model/V3ClassSwap.py", REPO / "model/V3Restricted.py", REPO / "model/V3CMixStyle.py",
+        Path(__file__), REPO / "model/QuangV3.py", REPO / "model/V3ClassSwap.py", REPO / "model/V3Restricted.py", REPO / "model/V3CMixStyle.py", REPO / "model/V3StructuralMap.py",
         REPO / "model/v3_mixstyle.py", REPO / "building_graph.py", REPO / "dep_vocab.py",
         REPO / "dep_vocab.json",
     )}

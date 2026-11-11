@@ -18,7 +18,7 @@ from evaluate_v3_quang import REPO, environment, positive_int, read_json, sha256
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", type=Path, default=REPO / "result/v3_cmixstyle")
-    parser.add_argument("--variants", nargs="+", choices=("baseline", "classswap", "restricted", "cmixstyle"),
+    parser.add_argument("--variants", nargs="+", choices=("baseline", "classswap", "restricted", "cmixstyle", "structmap"),
                         default=["baseline", "cmixstyle"])
     parser.add_argument("--experiment-name", default="v3_cmixstyle",
                         help="Output prefix; for example v3_classswap")
@@ -40,7 +40,7 @@ def build_parser():
     parser.add_argument("--restricted-structural-init", type=float, default=1.0)
     parser.add_argument("--restricted-semantic-budget", type=float, default=0.8)
     parser.add_argument("--restricted-semantic-penalty", type=float, default=0.1)
-    parser.add_argument("--struct-mode", choices=("low", "high"), default="low")
+    parser.add_argument("--struct-mode", choices=("low", "high", "directed"), default="low")
     parser.add_argument("--max-graphs", type=positive_int, default=4)
     parser.add_argument("--amp", type=int, choices=(0, 1), default=0)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")

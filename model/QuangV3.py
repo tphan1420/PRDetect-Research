@@ -1,9 +1,11 @@
 """Inference-only port of Quang\'s PRDetect RGCN v3.
 
 Source: docs/PRDetect_RGCN_v3_tong_hop.md (rgcn_plus.py).
-Preserves the checkpoint architecture, legacy relation-half assumptions,
-feature conversion and clipping. Optional feature_transform is an identity
-extension point unless explicitly supplied by an experimental subclass.
+Preserves the checkpoint architecture and legacy relation-half assumptions for
+``low``/``high`` modes.  ``directed`` is an opt-in schema for graphs produced
+by building_graph.py: every non-self edge is dependent -> head. Optional
+feature_transform is an identity extension point unless explicitly supplied by
+an experimental subclass.
 Use evaluate_v3_quang.py; mode is not stored in the supplied checkpoints.
 """
 
@@ -62,14 +64,22 @@ def read_raw(path):
 
 
 def fwd_mask(et, R, mode):
+    if mode == "directed":
+        # building_graph.py writes one dependent -> head edge per token. Its
+        # relation IDs identify dependency labels, not direction halves.
+        return np.ones_like(et, dtype=bool)
     half = R // 2
     if mode == "low":
         return et < half
-    return (et >= half) & (et < 2 * half)
+    if mode == "high":
+        return (et >= half) & (et < 2 * half)
+    raise ValueError(f"Unknown structural mapping mode: {mode}")
 
 
 def parent_array(n, src, dst, et, R, mode):
     m = fwd_mask(et, R, mode) & (src != dst)
+    if mode == "directed" and np.unique(src[m]).size != int(m.sum()):
+        raise ValueError("Directed structural mapping requires at most one non-self parent edge per node")
     par = -np.ones(n, dtype=np.int64)
     par[src[m]] = dst[m]
     return par, int(m.sum()), np.unique(src[m]).size
@@ -147,6 +157,8 @@ class GraphSet:
             e = np.asarray(ei[i]).reshape(2, -1).astype(np.int64)
             t = np.asarray(et[i]).reshape(-1).astype(np.int64)
             if t.size and t.max() >= R:
+                if mode == "directed":
+                    raise ValueError("Directed structural mapping refuses relation IDs outside training R")
                 t = np.minimum(t, R - 1)
             st, gf = struct_features(n, e[0], e[1], t, R, mode)
             X.append(x); nn_.append(n); ec.append(e.shape[1])
