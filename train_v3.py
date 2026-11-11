@@ -20,7 +20,7 @@ from evaluate_v3_quang import (REPO, TRAINING_DOMAINS, environment, positive_int
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variants", nargs="+", choices=("baseline", "classswap", "restricted", "cmixstyle", "structmap"),
+    parser.add_argument("--variants", nargs="+", choices=("baseline", "meanlogit", "classswap", "restricted", "cmixstyle", "structmap"),
                         default=["baseline", "cmixstyle"])
     parser.add_argument("--seeds", type=int, nargs="+", default=[2025, 2026])
     parser.add_argument("--graph-dir", type=Path, default=REPO / "graph_data")
@@ -88,6 +88,9 @@ def validate_args(args):
         raise ValueError("Corrected Structural Mapping requires --struct-mode directed")
     if args.struct_mode == "directed" and set(args.variants) != {"structmap"}:
         raise ValueError("--struct-mode directed is reserved for the structmap variant")
+    if ("baseline" in args.variants and "meanlogit" in args.variants
+            and args.readout != "pool3"):
+        raise ValueError("The paired baseline/meanlogit ablation requires --readout pool3")
     if "cmixstyle" in args.variants:
         if args.aug == "none":
             raise ValueError("CMixStyle is applied to the existing augmented branch; --aug cannot be none")
@@ -108,6 +111,11 @@ def validate_args(args):
             raise ValueError("restricted-semantic-penalty must be finite and nonnegative")
 
 
+def effective_readout(args, variant):
+    """Resolve a named architecture variant before construction and serialization."""
+    return "meanlogit" if variant == "meanlogit" else args.readout
+
+
 def build_model(args, variant, R):
     from model.QuangV3 import Net
     from model.V3ClassSwap import ClassPreservingSyntaxSwapNet
@@ -118,8 +126,9 @@ def build_model(args, variant, R):
     kwargs = dict(d=args.hidden, nb=args.num_bases, L=args.layers, p=args.dropout,
                   p_in=args.in_dropout, edge_drop=args.edge_drop,
                   use_struct=bool(args.struct), use_gfeat=bool(args.gfeat),
-                  readout=args.readout, aug=args.aug, aug_max=args.aug_max, mode=args.struct_mode)
-    if variant == "baseline":
+                  readout=effective_readout(args, variant), aug=args.aug,
+                  aug_max=args.aug_max, mode=args.struct_mode)
+    if variant in ("baseline", "meanlogit"):
         return Net(R, **kwargs)
     if variant == "structmap":
         return CorrectedStructuralMappingNet(R, **kwargs)
@@ -203,7 +212,8 @@ def signature(args, variant, seed, data_hashes):
     config = vars(args).copy()
     for key in ("variants", "seeds", "output_dir", "graph_dir", "skip_completed", "overwrite"):
         config.pop(key)
-    if variant in ("baseline", "classswap", "restricted", "structmap"):
+    config["effective_readout"] = effective_readout(args, variant)
+    if variant in ("baseline", "meanlogit", "classswap", "restricted", "structmap"):
         for key in ("mixstyle_p", "mixstyle_alpha", "mixstyle_strength"):
             config.pop(key)
     code = {str(p.relative_to(REPO)): sha256(p) for p in (
@@ -251,7 +261,7 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
     checkpoint_path = args.output_dir / f"v3_{variant}_seed{seed}.pt"
     record_path = checkpoint_path.with_suffix(".train.json")
     saved_args = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
-    saved_args.update(seeds=[seed], cons=0.0)
+    saved_args.update(seeds=[seed], cons=0.0, readout=effective_readout(args, variant))
     history, best_score, best_epoch, bad, step = [], float("inf"), 0, 0, 0
     start = time.time()
     # MixStyle samples Beta coefficients on CPU; do not let those extra draws

@@ -137,7 +137,7 @@ def find_checkpoints(root, seeds, variant="quang"):
         raise ValueError("Provide at least one seed, without duplicates")
     found = {}
     for seed in seeds:
-        if variant not in ("quang", "baseline", "classswap", "restricted", "cmixstyle", "structmap"):
+        if variant not in ("quang", "baseline", "meanlogit", "classswap", "restricted", "cmixstyle", "structmap"):
             raise ValueError(f"Unknown V3 variant: {variant}")
         stem = (f"p3fin_V1_swap_s{seed}_seed{seed}" if variant == "quang"
                 else f"v3_{variant}_seed{seed}")
@@ -206,7 +206,7 @@ def _load_model(config, seed, device):
     if variant == "quang":
         if a.get("aug") != "swap" or a.get("cons", 0) != 0:
             raise ValueError(f"Expected V1_swap without consistency: {path}")
-        if checkpoint.get("method") in ("v3_baseline", "v3_classswap", "v3_restricted", "v3_cmixstyle", "v3_structmap"):
+        if checkpoint.get("method") in ("v3_baseline", "v3_meanlogit", "v3_classswap", "v3_restricted", "v3_cmixstyle", "v3_structmap"):
             raise ValueError("New ablation checkpoint requires its explicit --variant")
     else:
         if checkpoint.get("method") != f"v3_{variant}":
@@ -215,6 +215,8 @@ def _load_model(config, seed, device):
             raise ValueError(f"Training did not complete: {path}; saved best epoch is incomplete")
         if checkpoint.get("struct_mode") != config["struct_mode"]:
             raise ValueError("--struct-mode differs from the checkpoint training mode")
+        if variant == "meanlogit" and a.get("readout") != "meanlogit":
+            raise ValueError(f"MeanLogit checkpoint does not record meanlogit readout: {path}")
         if variant == "classswap":
             from model.V3ClassSwap import ClassPreservingSyntaxSwapNet
             Net = ClassPreservingSyntaxSwapNet
@@ -577,7 +579,7 @@ def build_parser():
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("inspect", "run"):
         p = sub.add_parser(command)
-        p.add_argument("--variant", choices=("quang", "baseline", "classswap", "restricted", "cmixstyle", "structmap"), default="quang")
+        p.add_argument("--variant", choices=("quang", "baseline", "meanlogit", "classswap", "restricted", "cmixstyle", "structmap"), default="quang")
         p.add_argument("--train-domain", choices=tuple(TRAINING_DOMAINS), default="hc3",
                        help="Training domain; determines in-domain Table 2 and Table 3 direction")
         p.add_argument("--checkpoint-dir", default=str(REPO / "model/V3_quang"))

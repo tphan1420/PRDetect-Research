@@ -18,7 +18,7 @@ from evaluate_v3_quang import REPO, environment, positive_int, read_json, sha256
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", type=Path, default=REPO / "result/v3_cmixstyle")
-    parser.add_argument("--variants", nargs="+", choices=("baseline", "classswap", "restricted", "cmixstyle", "structmap"),
+    parser.add_argument("--variants", nargs="+", choices=("baseline", "meanlogit", "classswap", "restricted", "cmixstyle", "structmap"),
                         default=["baseline", "cmixstyle"])
     parser.add_argument("--experiment-name", default="v3_cmixstyle",
                         help="Output prefix; for example v3_classswap")

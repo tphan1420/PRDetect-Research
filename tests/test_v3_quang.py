@@ -78,12 +78,27 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reserved"):
             train_v3.validate_args(incompatible)
 
+    def test_meanlogit_is_a_named_readout_variant(self):
+        import train_v3
+
+        args = train_v3.build_parser().parse_args([
+            "--variants", "baseline", "meanlogit", "--struct-mode", "low", "--device", "cpu",
+        ])
+        train_v3.validate_args(args)
+        self.assertEqual(train_v3.effective_readout(args, "baseline"), "pool3")
+        self.assertEqual(train_v3.effective_readout(args, "meanlogit"), "meanlogit")
+        with self.assertRaisesRegex(ValueError, "requires --readout pool3"):
+            args = train_v3.build_parser().parse_args([
+                "--variants", "baseline", "meanlogit", "--readout", "meanlogit", "--device", "cpu",
+            ])
+            train_v3.validate_args(args)
+
     def test_new_suites_and_variant_discovery_do_not_mix_checkpoints(self):
         self.assertEqual(len(runner.benchmark_cases("full")), 15)
         self.assertEqual(len(runner.benchmark_cases("table2")), 5)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for variant in ("baseline", "classswap", "restricted", "cmixstyle", "structmap"):
+            for variant in ("baseline", "meanlogit", "classswap", "restricted", "cmixstyle", "structmap"):
                 checkpoint = root / f"v3_{variant}_seed2025.pt"
                 checkpoint.write_bytes(variant.encode())
                 self.assertEqual(runner.find_checkpoints(root, [2025], variant)["2025"], str(checkpoint))
