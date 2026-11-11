@@ -1,7 +1,7 @@
-"""Train V3 baseline and V3-CMixStyle from the same legacy-domain graphs.
+"""Train V3 augmentation ablations from the same legacy-domain graphs.
 
 No test files are read during training or checkpoint selection. No R-Drop,
-class-preserving swap, relation remapping, or length balancing is introduced.
+relation remapping, or length balancing is introduced.
 Model definitions, augmentation, and training are separate for future ablations.
 """
 
@@ -20,7 +20,7 @@ from evaluate_v3_quang import (REPO, TRAINING_DOMAINS, environment, positive_int
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variants", nargs="+", choices=("baseline", "cmixstyle"),
+    parser.add_argument("--variants", nargs="+", choices=("baseline", "classswap", "cmixstyle"),
                         default=["baseline", "cmixstyle"])
     parser.add_argument("--seeds", type=int, nargs="+", default=[2025, 2026])
     parser.add_argument("--graph-dir", type=Path, default=REPO / "graph_data")
@@ -85,10 +85,13 @@ def validate_args(args):
             raise ValueError("CMixStyle is applied to the existing augmented branch; --aug cannot be none")
         if args.micro_batch_size < 2 or args.mixstyle_p == 0 or args.mixstyle_strength == 0:
             raise ValueError("CMixStyle needs a donor pool >=2, nonzero probability and strength")
+    if "classswap" in args.variants and args.aug not in ("swap", "both"):
+        raise ValueError("Class-preserving Syntax Swap requires --aug swap or --aug both")
 
 
 def build_model(args, variant, R):
     from model.QuangV3 import Net
+    from model.V3ClassSwap import ClassPreservingSyntaxSwapNet
     from model.V3CMixStyle import CMixStyleNet
 
     kwargs = dict(d=args.hidden, nb=args.num_bases, L=args.layers, p=args.dropout,
@@ -97,6 +100,8 @@ def build_model(args, variant, R):
                   readout=args.readout, aug=args.aug, aug_max=args.aug_max, mode=args.struct_mode)
     if variant == "baseline":
         return Net(R, **kwargs)
+    if variant == "classswap":
+        return ClassPreservingSyntaxSwapNet(R, **kwargs)
     if variant != "cmixstyle":
         raise ValueError(f"Unknown variant: {variant}")
     return CMixStyleNet(R, **kwargs, mixstyle_p=args.mixstyle_p,
@@ -168,11 +173,11 @@ def signature(args, variant, seed, data_hashes):
     config = vars(args).copy()
     for key in ("variants", "seeds", "output_dir", "graph_dir", "skip_completed", "overwrite"):
         config.pop(key)
-    if variant == "baseline":
+    if variant in ("baseline", "classswap"):
         for key in ("mixstyle_p", "mixstyle_alpha", "mixstyle_strength"):
             config.pop(key)
     code = {str(p.relative_to(REPO)): sha256(p) for p in (
-        Path(__file__), REPO / "model/QuangV3.py", REPO / "model/V3CMixStyle.py",
+        Path(__file__), REPO / "model/QuangV3.py", REPO / "model/V3ClassSwap.py", REPO / "model/V3CMixStyle.py",
         REPO / "model/v3_mixstyle.py", REPO / "building_graph.py", REPO / "dep_vocab.py",
         REPO / "dep_vocab.json",
     )}
@@ -229,7 +234,8 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
         model.train()
         permutation = torch.randperm(train.G, generator=sampler_generator)
         epoch_loss = 0.0
-        coverage = {"graphs": 0, "eligible": 0, "applied": 0}
+        mixstyle_coverage = {"graphs": 0, "eligible": 0, "applied": 0}
+        classswap_coverage = {"selected": 0, "eligible": 0, "swapped": 0}
         for offset in range(0, train.G, args.batch_size):
             indices = permutation[offset:offset + args.batch_size]
             optimizer.zero_grad(set_to_none=True)
@@ -252,8 +258,11 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
                     scaler.scale(weight * 0.5 * noisy_loss).backward()
                     epoch_loss += 0.5 * float(noisy_loss.detach()) * batch["B"]
                     if variant == "cmixstyle":
-                        for key in coverage:
-                            coverage[key] += model.mixstyle.last_stats[key]
+                        for key in mixstyle_coverage:
+                            mixstyle_coverage[key] += model.mixstyle.last_stats[key]
+                    if variant == "classswap":
+                        for key in classswap_coverage:
+                            classswap_coverage[key] += model.last_swap_stats[key]
                     del noisy, noisy_loss
                 del batch
             scaler.unscale_(optimizer)
@@ -281,8 +290,8 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
             raise FloatingPointError("Non-finite loss; no completed checkpoint will be marked")
         history.append(dict(epoch=epoch, train_loss=epoch_loss / train.G, val_loss=clean_loss,
                             val_swap_loss=swap_loss, selection_score=score, **metrics,
-                            mixstyle=coverage))
-        if variant == "cmixstyle" and coverage["eligible"] == 0:
+                            mixstyle=mixstyle_coverage, classswap=classswap_coverage))
+        if variant == "cmixstyle" and mixstyle_coverage["eligible"] == 0:
             raise RuntimeError("No eligible same-class MixStyle donors: increase micro-batch-size")
         improved = score < best_score - 1e-6
         if improved:
@@ -297,6 +306,8 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
                 training_complete=False,
                 mixstyle=dict(p=args.mixstyle_p, alpha=args.mixstyle_alpha,
                               strength=args.mixstyle_strength) if variant == "cmixstyle" else None,
+                classswap=dict(same_label=True, different_graph=True, same_relation=True)
+                if variant == "classswap" else None,
                 run_signature=run_signature, provenance=provenance,
             ), checkpoint_path)
             del state
@@ -306,7 +317,8 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
                                     provenance=provenance, best_epoch=best_epoch, history=history))
         print(f"Epoch {epoch:02d} | loss {epoch_loss/train.G:.4f} | val {clean_loss:.4f} "
               f"swap {swap_loss:.4f} | acc {metrics['accuracy']:.4f} | "
-              f"MixStyle {coverage['applied']}/{coverage['eligible']} eligible "
+              f"MixStyle {mixstyle_coverage['applied']}/{mixstyle_coverage['eligible']} eligible | "
+              f"ClassSwap {classswap_coverage['swapped']}/{classswap_coverage['selected']} selected "
               f"({'best' if improved else 'keep'})", flush=True)
         if bad >= args.patience:
             break

@@ -70,7 +70,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(len(runner.benchmark_cases("table2")), 5)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for variant in ("baseline", "cmixstyle"):
+            for variant in ("baseline", "classswap", "cmixstyle"):
                 checkpoint = root / f"v3_{variant}_seed2025.pt"
                 checkpoint.write_bytes(variant.encode())
                 self.assertEqual(runner.find_checkpoints(root, [2025], variant)["2025"], str(checkpoint))
@@ -251,6 +251,25 @@ class ConfigurationTests(unittest.TestCase):
                         "if feature_transform is not None:\n    h = feature_transform(h, b)"
                     ).body[0]))
                     forward.body.remove(hook)
+                    # Class-preserving swap is implemented by a subclass, but
+                    # the base forward now passes graph labels through to the
+                    # augmentation hook.  Remove that backwards-compatible
+                    # plumbing before comparing to Quang's original source.
+                    augment = next(n for n in node.body if isinstance(n, ast.FunctionDef)
+                                   and n.name == "_augment")
+                    self.assertEqual(augment.args.args[-1].arg, "labels")
+                    self.assertIsInstance(augment.args.defaults[-1], ast.Constant)
+                    self.assertIsNone(augment.args.defaults[-1].value)
+                    augment.args.args.pop()
+                    augment.args.defaults.pop()
+                    augment_call = next(
+                        n for n in ast.walk(forward)
+                        if isinstance(n, ast.Call)
+                        and isinstance(n.func, ast.Attribute)
+                        and n.func.attr == "_augment"
+                    )
+                    label_arg = augment_call.args.pop()
+                    self.assertEqual(ast.dump(label_arg), ast.dump(ast.parse("b.get('y')").body[0].value))
                 self.assertEqual(ast.dump(node), ast.dump(ref[node.name]), node.name)
 
 

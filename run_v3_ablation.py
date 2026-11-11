@@ -18,8 +18,10 @@ from evaluate_v3_quang import REPO, environment, positive_int, read_json, sha256
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", type=Path, default=REPO / "result/v3_cmixstyle")
-    parser.add_argument("--variants", nargs="+", choices=("baseline", "cmixstyle"),
+    parser.add_argument("--variants", nargs="+", choices=("baseline", "classswap", "cmixstyle"),
                         default=["baseline", "cmixstyle"])
+    parser.add_argument("--experiment-name", default="v3_cmixstyle",
+                        help="Output prefix; for example v3_classswap")
     parser.add_argument("--seeds", nargs="+", type=int, default=[2025, 2026])
     parser.add_argument("--stage", choices=("all", "train", "evaluate"), default="all")
     parser.add_argument("--suite", choices=("table2", "table3", "table4", "all", "full"), default="full")
@@ -144,7 +146,7 @@ def main(argv=None):
                   "--max-graphs", args.max_graphs, "--graph-budget-root", work,
                   "--work-dir", work / "eval" / variant)
         summary = comparison(work, args.variants, args.seeds)
-        archive = work / "v3_cmixstyle_ablation_results.zip"
+        archive = work / f"{args.experiment_name}_ablation_results.zip"
         with ZipFile(archive, "w", ZIP_DEFLATED) as output:
             output.write(summary, summary.name)
             for variant in args.variants:

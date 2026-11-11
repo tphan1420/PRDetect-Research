@@ -246,7 +246,7 @@ class Net(nn.Module):
             ind = 3 * d + (N_GF if use_gfeat else 0)
             self.mlp = nn.Sequential(nn.Linear(ind, d), nn.GELU(), nn.Dropout(p), nn.Linear(d, 1))
 
-    def _augment(self, x, src, dst, rel, bidx, B, mode, gen):
+    def _augment(self, x, src, dst, rel, bidx, B, mode, gen, labels=None):
         """Nhiễu mức đặc trưng mô phỏng thay từ: mỗi đồ thị chọn tỉ lệ rho~U(0,aug_max) nút;
         'swap' = thay vector bằng vector của một nút khác CÙNG nhãn quan hệ phụ thuộc (giữ vai trò cú pháp),
         'mask' = thay bằng vector mask học được. Cấu trúc cây không đổi."""
@@ -285,7 +285,7 @@ class Net(nn.Module):
         x, src, dst, rel, bidx, B = b["x"], b["src"], b["dst"], b["rel"], b["bidx"], b["B"]
         N = x.size(0)
         if aug_mode and aug_mode != "none":
-            x = self._augment(x, src, dst, rel, bidx, B, aug_mode, gen)
+            x = self._augment(x, src, dst, rel, bidx, B, aug_mode, gen, b.get("y"))
         if self.training and self.edge_drop > 0 and src.numel() > 0:
             keep = torch.rand(src.numel(), device=src.device) >= self.edge_drop
             src, dst, rel = src[keep], dst[keep], rel[keep]
