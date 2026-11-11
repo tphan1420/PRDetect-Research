@@ -1,4 +1,4 @@
-"""Train V3 baseline and V3-CMixStyle from the SAME legacy HC3 graphs.
+"""Train V3 baseline and V3-CMixStyle from the same legacy-domain graphs.
 
 No test files are read during training or checkpoint selection. No R-Drop,
 class-preserving swap, relation remapping, or length balancing is introduced.
@@ -14,7 +14,8 @@ import math
 from pathlib import Path
 import time
 
-from evaluate_v3_quang import REPO, environment, positive_int, sha256, write_json
+from evaluate_v3_quang import (REPO, TRAINING_DOMAINS, environment, positive_int,
+                               sha256, write_json)
 
 
 def build_parser():
@@ -64,8 +65,9 @@ def build_parser():
 
 
 def validate_args(args):
-    if args.train_file != "hc3_train" or args.val_file != "hc3_val":
-        raise ValueError("This controlled experiment only trains hc3_train and selects on hc3_val")
+    pairs = {(item["train_file"], item["val_file"]) for item in TRAINING_DOMAINS.values()}
+    if (args.train_file, args.val_file) not in pairs:
+        raise ValueError("Use a supported train/validation pair from TRAINING_DOMAINS")
     if len(set(args.seeds)) != len(args.seeds) or len(set(args.variants)) != len(args.variants):
         raise ValueError("Seeds/variants must not contain duplicates")
     for name in ("dropout", "in_dropout", "edge_drop", "aug_max", "mixstyle_p", "mixstyle_strength"):
@@ -332,8 +334,9 @@ def main(argv=None):
         raise RuntimeError("Enable a GPU, or explicitly use --device cpu")
     args.graph_dir, args.output_dir = args.graph_dir.resolve(), args.output_dir.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    sources = [REPO / f"data/original_text/benchmarks/hc3/{name}.json"
-               for name in (args.train_file, args.val_file)]
+    domain = next(item for item in TRAINING_DOMAINS.values()
+                  if (item["train_file"], item["val_file"]) == (args.train_file, args.val_file))
+    sources = [REPO / domain["train_source"], REPO / domain["val_source"]]
     graphs = [args.graph_dir / f"{name}.pkl" for name in (args.train_file, args.val_file)]
     data_hashes = {str(p): sha256(p) for p in sources + graphs}
     pending = []

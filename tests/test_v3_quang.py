@@ -35,6 +35,15 @@ class ConfigurationTests(unittest.TestCase):
         self.assertTrue(all("gpt35_mixed" in c.source for c in cases))
         self.assertTrue(all(c.suite == "table3" for c in cases))
 
+    def test_gpt35_training_reverses_table2_and_table3_domains(self):
+        table2 = runner.benchmark_cases("table2", "gpt35")
+        table3 = runner.benchmark_cases("table3", "gpt35")
+        self.assertEqual(table2[0].split, "gpt3.5_mixed_test_split")
+        self.assertEqual(table3[0].split, "hc3_test")
+        self.assertEqual(len(runner.benchmark_cases("table2_table3", "gpt35")), 10)
+        for case in table2 + table3:
+            self.assertTrue((runner.REPO / case.source).is_file(), case.source)
+
     def test_table4_has_only_original_and_four_25_percent_noises(self):
         cases = runner.benchmark_cases("table4")
         self.assertEqual([c.split for c in cases], [

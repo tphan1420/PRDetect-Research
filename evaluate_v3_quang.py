@@ -24,6 +24,24 @@ MODEL_SOURCE = REPO / "model/QuangV3.py"
 DEFAULT_SEEDS = [2021, 2022, 2023, 2024, 2025]
 METRICS = ("accuracy", "auc", "f1", "recall_ai", "recall_human")
 
+# A training domain fixes both the source train/validation split and which
+# direction Table 3 represents.  Keeping this mapping explicit prevents a
+# GPT-3.5 checkpoint from accidentally being evaluated as HC3 -> GPT-3.5.
+TRAINING_DOMAINS = {
+    "hc3": {
+        "train_file": "hc3_train",
+        "val_file": "hc3_val",
+        "train_source": "data/original_text/benchmarks/hc3/hc3_train.json",
+        "val_source": "data/original_text/benchmarks/hc3/hc3_val.json",
+    },
+    "gpt35": {
+        "train_file": "gpt3.5_mixed_train_split",
+        "val_file": "gpt3.5_mixed_val_split",
+        "train_source": "data/original_text/benchmarks/gpt35_mixed/gpt3.5_mixed_train_split.json",
+        "val_source": "data/original_text/benchmarks/gpt35_mixed/gpt3.5_mixed_val_split.json",
+    },
+}
+
 
 @dataclass(frozen=True)
 class Case:
@@ -37,22 +55,26 @@ class Case:
         return Path(self.source).stem
 
 
-def benchmark_cases(suite="all"):
-    table2 = [Case(
-        "table2", "Original", 0,
-        "data/original_text/benchmarks/hc3/hc3_test.json",
-    )] + [Case(
-        "table2", f"Synonym {rate}%", rate,
-        "data/perturbed_text/hc3/lexical_synonym/"
-        f"hc3_test_adj_{rate}_synonym_replace.json",
+def benchmark_cases(suite="all", train_domain="hc3"):
+    if train_domain not in TRAINING_DOMAINS:
+        raise ValueError(f"Unknown training domain: {train_domain}")
+    if train_domain == "hc3":
+        in_domain = ("data/original_text/benchmarks/hc3/hc3_test.json",
+                     "data/perturbed_text/hc3/lexical_synonym/hc3_test_adj_{rate}_synonym_replace.json")
+        cross_domain = ("data/original_text/benchmarks/gpt35_mixed/gpt3.5_mixed_test_split.json",
+                        "data/perturbed_text/gpt35_mixed/lexical_synonym/"
+                        "gpt3.5_mixed_test_adj_{rate}_synonym_replace.json")
+    else:
+        in_domain = ("data/original_text/benchmarks/gpt35_mixed/gpt3.5_mixed_test_split.json",
+                     "data/perturbed_text/gpt35_mixed/lexical_synonym/"
+                     "gpt3.5_mixed_test_adj_{rate}_synonym_replace.json")
+        cross_domain = ("data/original_text/benchmarks/hc3/hc3_test.json",
+                        "data/perturbed_text/hc3/lexical_synonym/hc3_test_adj_{rate}_synonym_replace.json")
+    table2 = [Case("table2", "Original", 0, in_domain[0])] + [Case(
+        "table2", f"Synonym {rate}%", rate, in_domain[1].format(rate=rate),
     ) for rate in (5, 10, 20, 30)]
-    table3 = [Case(
-        "table3", "Original", 0,
-        "data/original_text/benchmarks/gpt35_mixed/gpt3.5_mixed_test_split.json",
-    )] + [Case(
-        "table3", f"Synonym {rate}%", rate,
-        "data/perturbed_text/gpt35_mixed/lexical_synonym/"
-        f"gpt3.5_mixed_test_adj_{rate}_synonym_replace.json",
+    table3 = [Case("table3", "Original", 0, cross_domain[0])] + [Case(
+        "table3", f"Synonym {rate}%", rate, cross_domain[1].format(rate=rate),
     ) for rate in (5, 10, 20, 30)]
     table4 = [Case(
         "table4", "Original", 0,
@@ -63,6 +85,8 @@ def benchmark_cases(suite="all"):
     ) for kind in ("insert", "repeat", "replace", "delete")]
     if suite == "table2":
         return table2
+    if suite == "table2_table3":
+        return table2 + table3
     if suite == "full":
         return table2 + table3 + table4
     if suite == "table3":
@@ -132,6 +156,8 @@ def find_checkpoints(root, seeds, variant="quang"):
 
 def make_config(args):
     variant = args.variant
+    if variant == "quang" and args.train_domain != "hc3":
+        raise ValueError("Legacy Quang checkpoints only support --train-domain hc3")
     paths = find_checkpoints(args.checkpoint_dir, args.seeds, variant)
     files = [MODEL_SOURCE, REPO / "building_graph.py", REPO / "dep_vocab.py",
              REPO / "dep_vocab.json"]
@@ -139,7 +165,7 @@ def make_config(args):
         files += [REPO / "model/V3CMixStyle.py", REPO / "model/v3_mixstyle.py"]
     return {
         "model": "Quang_v3_V1_swap" if variant == "quang" else f"v3_{variant}",
-        "variant": variant, "train": "hc3", "seeds": args.seeds,
+        "variant": variant, "train_domain": args.train_domain, "seeds": args.seeds,
         "checkpoint_paths": paths,
         "checkpoint_sha256": {s: sha256(p) for s, p in paths.items()},
         "code_sha256": {str(p.relative_to(REPO)): sha256(p) for p in files if p.is_file()},
@@ -166,7 +192,8 @@ def _load_model(config, seed, device):
     if not {"state", "args", "R", "gm", "gs", "thr"} <= checkpoint.keys():
         raise ValueError(f"Not a Quang V3 checkpoint: {path}")
     a = checkpoint["args"]
-    if a["train_file"] != "hc3_train" or a["seeds"] != [seed]:
+    expected_train = TRAINING_DOMAINS[config["train_domain"]]["train_file"]
+    if a["train_file"] != expected_train or a["seeds"] != [seed]:
         raise ValueError(f"Checkpoint training dataset/seed mismatch: {path}")
     variant = config.get("variant", "quang")
     extra = {}
@@ -472,7 +499,7 @@ def run_benchmarks(args):
     results = work / "result"
     results.mkdir(exist_ok=True)
     config = make_config(args)
-    cases = benchmark_cases(args.suite)
+    cases = benchmark_cases(args.suite, args.train_domain)
     for case in cases:
         if not (REPO / case.source).is_file():
             raise FileNotFoundError(REPO / case.source)
@@ -486,15 +513,15 @@ def run_benchmarks(args):
     execution = list(cases)
     extra_cases = []
     if not args.skip_clean_check:
-        clean = next((c for c in cases if c.suite == "table4" and c.noise_percent == 0), None)
+        clean = next((c for c in cases if c.suite == "table2" and c.noise_percent == 0), None)
         if clean is None:
-            original = benchmark_cases("table4")[0]
+            original = benchmark_cases("table2", args.train_domain)[0]
             clean = Case("sanity", original.condition, 0, original.source)
             extra_cases.append(clean)
         evaluate_case(clean, config, config_path, work, args.max_graphs, args.force)
         mean = statistics.mean(read_json(report_path(results, clean, s))["accuracy"] for s in args.seeds)
-        print(f"HC3 Original mean: {mean:.4f}", flush=True)
-        if (args.variant == "quang" and sorted(args.seeds) == DEFAULT_SEEDS
+        print(f"{args.train_domain} in-domain Original mean: {mean:.4f}", flush=True)
+        if (args.variant == "quang" and args.train_domain == "hc3" and sorted(args.seeds) == DEFAULT_SEEDS
                 and abs(mean - 0.9902) > args.clean_tolerance):
             raise ValueError("Clean HC3 differs substantially from Quang's report. Check parser, "
                              "graph vocabulary and --struct-mode; do not tune on test. "
@@ -528,6 +555,8 @@ def build_parser():
     for command in ("inspect", "run"):
         p = sub.add_parser(command)
         p.add_argument("--variant", choices=("quang", "baseline", "cmixstyle"), default="quang")
+        p.add_argument("--train-domain", choices=tuple(TRAINING_DOMAINS), default="hc3",
+                       help="Training domain; determines in-domain Table 2 and Table 3 direction")
         p.add_argument("--checkpoint-dir", default=str(REPO / "model/V3_quang"))
         p.add_argument("--seeds", type=int, nargs="+", default=DEFAULT_SEEDS)
         p.add_argument("--batch-size", type=positive_int, default=4)
@@ -538,8 +567,8 @@ def build_parser():
             p.add_argument("--config")
             p.add_argument("--output")
         else:
-            p.add_argument("--suite", choices=("all", "table2", "table3", "table4", "full"), default="all",
-                           help="all: legacy Tables 3+4; full: Tables 2(HC3)+3(HC3->GPT3.5)+4")
+            p.add_argument("--suite", choices=("all", "table2", "table3", "table4", "table2_table3", "full"), default="all",
+                           help="table2_table3: in-domain Table 2 plus cross-domain Table 3; full also adds Table 4")
             p.add_argument("--work-dir", default=str(REPO / "result/v3_quang_eval"))
             p.add_argument("--max-graphs", type=positive_int, default=4)
             p.add_argument("--force", action="store_true", help="Rerun reports; do not reuse old predictions")
