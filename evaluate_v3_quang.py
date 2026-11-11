@@ -137,7 +137,7 @@ def find_checkpoints(root, seeds, variant="quang"):
         raise ValueError("Provide at least one seed, without duplicates")
     found = {}
     for seed in seeds:
-        if variant not in ("quang", "baseline", "classswap", "cmixstyle"):
+        if variant not in ("quang", "baseline", "classswap", "restricted", "cmixstyle"):
             raise ValueError(f"Unknown V3 variant: {variant}")
         stem = (f"p3fin_V1_swap_s{seed}_seed{seed}" if variant == "quang"
                 else f"v3_{variant}_seed{seed}")
@@ -163,6 +163,8 @@ def make_config(args):
              REPO / "dep_vocab.json"]
     if variant == "classswap":
         files += [REPO / "model/V3ClassSwap.py"]
+    elif variant == "restricted":
+        files += [REPO / "model/V3Restricted.py"]
     elif variant == "cmixstyle":
         files += [REPO / "model/V3CMixStyle.py", REPO / "model/v3_mixstyle.py"]
     return {
@@ -202,7 +204,7 @@ def _load_model(config, seed, device):
     if variant == "quang":
         if a.get("aug") != "swap" or a.get("cons", 0) != 0:
             raise ValueError(f"Expected V1_swap without consistency: {path}")
-        if checkpoint.get("method") in ("v3_baseline", "v3_classswap", "v3_cmixstyle"):
+        if checkpoint.get("method") in ("v3_baseline", "v3_classswap", "v3_restricted", "v3_cmixstyle"):
             raise ValueError("New ablation checkpoint requires its explicit --variant")
     else:
         if checkpoint.get("method") != f"v3_{variant}":
@@ -214,6 +216,17 @@ def _load_model(config, seed, device):
         if variant == "classswap":
             from model.V3ClassSwap import ClassPreservingSyntaxSwapNet
             Net = ClassPreservingSyntaxSwapNet
+        elif variant == "restricted":
+            from model.V3Restricted import StructureGuidedRestrictedNet
+            Net = StructureGuidedRestrictedNet
+            if not checkpoint.get("restricted"):
+                raise ValueError(f"Missing restricted-embedding settings: {path}")
+            extra = {
+                "semantic_init": checkpoint["restricted"]["semantic_init"],
+                "structural_init": checkpoint["restricted"]["structural_init"],
+                "semantic_budget": checkpoint["restricted"]["semantic_budget"],
+                "semantic_penalty": checkpoint["restricted"]["semantic_penalty"],
+            }
         elif variant == "cmixstyle":
             from model.V3CMixStyle import CMixStyleNet
             Net = CMixStyleNet
@@ -492,7 +505,7 @@ def export_archive(results, archive, cases, seeds, extra_cases=()):
             output.write(path, str(Path("result") / path.relative_to(results)))
         output.write(Path(__file__), "evaluate_v3_quang.py")
         output.write(MODEL_SOURCE, "model/QuangV3.py")
-        for relative in ("model/V3ClassSwap.py", "model/V3CMixStyle.py", "model/v3_mixstyle.py", "train_v3.py"):
+        for relative in ("model/V3ClassSwap.py", "model/V3Restricted.py", "model/V3CMixStyle.py", "model/v3_mixstyle.py", "train_v3.py"):
             source = REPO / relative
             if source.is_file():
                 output.write(source, relative)
@@ -559,7 +572,7 @@ def build_parser():
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("inspect", "run"):
         p = sub.add_parser(command)
-        p.add_argument("--variant", choices=("quang", "baseline", "classswap", "cmixstyle"), default="quang")
+        p.add_argument("--variant", choices=("quang", "baseline", "classswap", "restricted", "cmixstyle"), default="quang")
         p.add_argument("--train-domain", choices=tuple(TRAINING_DOMAINS), default="hc3",
                        help="Training domain; determines in-domain Table 2 and Table 3 direction")
         p.add_argument("--checkpoint-dir", default=str(REPO / "model/V3_quang"))

@@ -281,7 +281,7 @@ class Net(nn.Module):
             x_new = torch.where(use_mask.unsqueeze(1), self.mask_emb.to(x.dtype).unsqueeze(0).expand_as(x), x_new)
         return x_new
 
-    def forward(self, b, aug_mode=None, gen=None, feature_transform=None):
+    def forward(self, b, aug_mode=None, gen=None, feature_transform=None, structural_transform=None):
         x, src, dst, rel, bidx, B = b["x"], b["src"], b["dst"], b["rel"], b["bidx"], b["B"]
         N = x.size(0)
         if aug_mode and aug_mode != "none":
@@ -298,7 +298,10 @@ class Net(nn.Module):
         if self.use_struct:
             st = b["st"]
             s = torch.cat([self.e_dep(st[:, 0]), self.e_chi(st[:, 1]), self.e_dis(st[:, 2])], 1)
-            h = h + self.sproj(s)
+            s = self.sproj(s)
+            if structural_transform is not None:
+                s = structural_transform(s, b)
+            h = h + s
         h = F.gelu(h)
         for lyr, ln in zip(self.layers, self.norms):
             h = h + self.drop(F.gelu(ln(lyr(h, src, dst, rel, norm))))

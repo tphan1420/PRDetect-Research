@@ -18,13 +18,15 @@ from evaluate_v3_quang import REPO, environment, positive_int, read_json, sha256
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", type=Path, default=REPO / "result/v3_cmixstyle")
-    parser.add_argument("--variants", nargs="+", choices=("baseline", "classswap", "cmixstyle"),
+    parser.add_argument("--variants", nargs="+", choices=("baseline", "classswap", "restricted", "cmixstyle"),
                         default=["baseline", "cmixstyle"])
     parser.add_argument("--experiment-name", default="v3_cmixstyle",
                         help="Output prefix; for example v3_classswap")
     parser.add_argument("--seeds", nargs="+", type=int, default=[2025, 2026])
     parser.add_argument("--stage", choices=("all", "train", "evaluate"), default="all")
     parser.add_argument("--suite", choices=("table2", "table3", "table4", "all", "full"), default="full")
+    parser.add_argument("--skip-clean-check", action="store_true",
+                        help="For table3-only diagnostics, do not also run the source-domain sanity split")
     parser.add_argument("--batch-size", type=positive_int, default=32)
     parser.add_argument("--micro-batch-size", type=positive_int, default=8)
     parser.add_argument("--eval-batch-size", type=positive_int, default=4)
@@ -34,6 +36,10 @@ def build_parser():
     parser.add_argument("--mixstyle-p", type=float, default=0.5)
     parser.add_argument("--mixstyle-alpha", type=float, default=0.1)
     parser.add_argument("--mixstyle-strength", type=float, default=0.3)
+    parser.add_argument("--restricted-semantic-init", type=float, default=0.9)
+    parser.add_argument("--restricted-structural-init", type=float, default=1.0)
+    parser.add_argument("--restricted-semantic-budget", type=float, default=0.8)
+    parser.add_argument("--restricted-semantic-penalty", type=float, default=0.1)
     parser.add_argument("--struct-mode", choices=("low", "high"), default="low")
     parser.add_argument("--max-graphs", type=positive_int, default=4)
     parser.add_argument("--amp", type=int, choices=(0, 1), default=0)
@@ -123,7 +129,10 @@ def main(argv=None):
 
     train_arguments = ["--variants", *args.variants, "--seeds", *map(str, args.seeds)]
     for name in ("batch_size", "micro_batch_size", "val_batch_size", "epochs", "patience",
-                 "mixstyle_p", "mixstyle_alpha", "mixstyle_strength", "struct_mode", "amp", "device"):
+                 "mixstyle_p", "mixstyle_alpha", "mixstyle_strength",
+                 "restricted_semantic_init", "restricted_structural_init",
+                 "restricted_semantic_budget", "restricted_semantic_penalty",
+                 "struct_mode", "amp", "device"):
         train_arguments += ["--" + name.replace("_", "-"), str(getattr(args, name))]
     validate_args(training_parser().parse_args(train_arguments))
     work = args.work_dir.resolve()
@@ -139,12 +148,15 @@ def main(argv=None):
             release_training_cache(cache, work)
     if args.stage in ("all", "evaluate"):
         for variant in args.variants:
-            child("evaluate_v3_quang.py", "run", "--variant", variant,
-                  "--checkpoint-dir", checkpoint_dir, "--seeds", *args.seeds,
-                  "--suite", args.suite, "--batch-size", args.eval_batch_size,
-                  "--struct-mode", args.struct_mode, "--device", args.device,
-                  "--max-graphs", args.max_graphs, "--graph-budget-root", work,
-                  "--work-dir", work / "eval" / variant)
+            evaluation_arguments = ["run", "--variant", variant,
+                                    "--checkpoint-dir", checkpoint_dir, "--seeds", *args.seeds,
+                                    "--suite", args.suite, "--batch-size", args.eval_batch_size,
+                                    "--struct-mode", args.struct_mode, "--device", args.device,
+                                    "--max-graphs", args.max_graphs, "--graph-budget-root", work,
+                                    "--work-dir", work / "eval" / variant]
+            if args.skip_clean_check:
+                evaluation_arguments.append("--skip-clean-check")
+            child("evaluate_v3_quang.py", *evaluation_arguments)
         summary = comparison(work, args.variants, args.seeds)
         archive = work / f"{args.experiment_name}_ablation_results.zip"
         with ZipFile(archive, "w", ZIP_DEFLATED) as output:

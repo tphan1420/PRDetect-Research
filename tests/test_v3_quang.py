@@ -70,7 +70,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(len(runner.benchmark_cases("table2")), 5)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for variant in ("baseline", "classswap", "cmixstyle"):
+            for variant in ("baseline", "classswap", "restricted", "cmixstyle"):
                 checkpoint = root / f"v3_{variant}_seed2025.pt"
                 checkpoint.write_bytes(variant.encode())
                 self.assertEqual(runner.find_checkpoints(root, [2025], variant)["2025"], str(checkpoint))
@@ -238,6 +238,11 @@ class ConfigurationTests(unittest.TestCase):
                     # The only permitted departure from the original code is
                     # the opt-in transform between ln0 and structural addition.
                     forward = next(n for n in node.body if isinstance(n, ast.FunctionDef) and n.name == "forward")
+                    self.assertEqual(forward.args.args[-1].arg, "structural_transform")
+                    self.assertIsInstance(forward.args.defaults[-1], ast.Constant)
+                    self.assertIsNone(forward.args.defaults[-1].value)
+                    forward.args.args.pop()
+                    forward.args.defaults.pop()
                     self.assertEqual(forward.args.args[-1].arg, "feature_transform")
                     self.assertIsInstance(forward.args.defaults[-1], ast.Constant)
                     self.assertIsNone(forward.args.defaults[-1].value)
@@ -251,6 +256,28 @@ class ConfigurationTests(unittest.TestCase):
                         "if feature_transform is not None:\n    h = feature_transform(h, b)"
                     ).body[0]))
                     forward.body.remove(hook)
+                    struct_block = next(n for n in forward.body if isinstance(n, ast.If)
+                                        and isinstance(n.test, ast.Attribute)
+                                        and n.test.attr == "use_struct")
+                    struct_hook = next(n for n in struct_block.body if isinstance(n, ast.If)
+                                       and isinstance(n.test, ast.Compare)
+                                       and isinstance(n.test.left, ast.Name)
+                                       and n.test.left.id == "structural_transform")
+                    self.assertEqual(ast.dump(struct_hook), ast.dump(ast.parse(
+                        "if structural_transform is not None:\n    s = structural_transform(s, b)"
+                    ).body[0]))
+                    struct_block.body.remove(struct_hook)
+                    projection = next(n for n in struct_block.body if isinstance(n, ast.Assign)
+                                      and isinstance(n.targets[0], ast.Name) and n.targets[0].id == "s"
+                                      and isinstance(n.value, ast.Call)
+                                      and isinstance(n.value.func, ast.Attribute)
+                                      and n.value.func.attr == "sproj")
+                    addition = next(n for n in struct_block.body if isinstance(n, ast.Assign)
+                                    and isinstance(n.targets[0], ast.Name) and n.targets[0].id == "h"
+                                    and isinstance(n.value, ast.BinOp) and isinstance(n.value.right, ast.Name)
+                                    and n.value.right.id == "s")
+                    addition.value.right = projection.value
+                    struct_block.body.remove(projection)
                     # Class-preserving swap is implemented by a subclass, but
                     # the base forward now passes graph labels through to the
                     # augmentation hook.  Remove that backwards-compatible

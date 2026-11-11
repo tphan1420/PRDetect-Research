@@ -20,7 +20,7 @@ from evaluate_v3_quang import (REPO, TRAINING_DOMAINS, environment, positive_int
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--variants", nargs="+", choices=("baseline", "classswap", "cmixstyle"),
+    parser.add_argument("--variants", nargs="+", choices=("baseline", "classswap", "restricted", "cmixstyle"),
                         default=["baseline", "cmixstyle"])
     parser.add_argument("--seeds", type=int, nargs="+", default=[2025, 2026])
     parser.add_argument("--graph-dir", type=Path, default=REPO / "graph_data")
@@ -57,6 +57,10 @@ def build_parser():
     parser.add_argument("--mixstyle-p", type=float, default=0.5)
     parser.add_argument("--mixstyle-alpha", type=float, default=0.1)
     parser.add_argument("--mixstyle-strength", type=float, default=0.3)
+    parser.add_argument("--restricted-semantic-init", type=float, default=0.9)
+    parser.add_argument("--restricted-structural-init", type=float, default=1.0)
+    parser.add_argument("--restricted-semantic-budget", type=float, default=0.8)
+    parser.add_argument("--restricted-semantic-penalty", type=float, default=0.1)
     parser.add_argument("--amp", type=int, choices=(0, 1), default=0)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
     parser.add_argument("--skip-completed", action="store_true")
@@ -87,12 +91,24 @@ def validate_args(args):
             raise ValueError("CMixStyle needs a donor pool >=2, nonzero probability and strength")
     if "classswap" in args.variants and args.aug not in ("swap", "both"):
         raise ValueError("Class-preserving Syntax Swap requires --aug swap or --aug both")
+    if "restricted" in args.variants:
+        if not args.struct:
+            raise ValueError("Structure-Guided Restricted Embeddings requires --struct 1")
+        if not 0 < args.restricted_semantic_init < 1:
+            raise ValueError("restricted-semantic-init must be in (0,1)")
+        if not 0 < args.restricted_structural_init < 2:
+            raise ValueError("restricted-structural-init must be in (0,2)")
+        if not 0 <= args.restricted_semantic_budget <= 1:
+            raise ValueError("restricted-semantic-budget must be in [0,1]")
+        if not math.isfinite(args.restricted_semantic_penalty) or args.restricted_semantic_penalty < 0:
+            raise ValueError("restricted-semantic-penalty must be finite and nonnegative")
 
 
 def build_model(args, variant, R):
     from model.QuangV3 import Net
     from model.V3ClassSwap import ClassPreservingSyntaxSwapNet
     from model.V3CMixStyle import CMixStyleNet
+    from model.V3Restricted import StructureGuidedRestrictedNet
 
     kwargs = dict(d=args.hidden, nb=args.num_bases, L=args.layers, p=args.dropout,
                   p_in=args.in_dropout, edge_drop=args.edge_drop,
@@ -102,6 +118,13 @@ def build_model(args, variant, R):
         return Net(R, **kwargs)
     if variant == "classswap":
         return ClassPreservingSyntaxSwapNet(R, **kwargs)
+    if variant == "restricted":
+        return StructureGuidedRestrictedNet(
+            R, **kwargs, semantic_init=args.restricted_semantic_init,
+            structural_init=args.restricted_structural_init,
+            semantic_budget=args.restricted_semantic_budget,
+            semantic_penalty=args.restricted_semantic_penalty,
+        )
     if variant != "cmixstyle":
         raise ValueError(f"Unknown variant: {variant}")
     return CMixStyleNet(R, **kwargs, mixstyle_p=args.mixstyle_p,
@@ -173,11 +196,11 @@ def signature(args, variant, seed, data_hashes):
     config = vars(args).copy()
     for key in ("variants", "seeds", "output_dir", "graph_dir", "skip_completed", "overwrite"):
         config.pop(key)
-    if variant in ("baseline", "classswap"):
+    if variant in ("baseline", "classswap", "restricted"):
         for key in ("mixstyle_p", "mixstyle_alpha", "mixstyle_strength"):
             config.pop(key)
     code = {str(p.relative_to(REPO)): sha256(p) for p in (
-        Path(__file__), REPO / "model/QuangV3.py", REPO / "model/V3ClassSwap.py", REPO / "model/V3CMixStyle.py",
+        Path(__file__), REPO / "model/QuangV3.py", REPO / "model/V3ClassSwap.py", REPO / "model/V3Restricted.py", REPO / "model/V3CMixStyle.py",
         REPO / "model/v3_mixstyle.py", REPO / "building_graph.py", REPO / "dep_vocab.py",
         REPO / "dep_vocab.json",
     )}
@@ -264,6 +287,11 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
                         for key in classswap_coverage:
                             classswap_coverage[key] += model.last_swap_stats[key]
                     del noisy, noisy_loss
+                if variant == "restricted":
+                    restriction_loss = model.restriction_loss()
+                    scaler.scale(weight * restriction_loss).backward()
+                    epoch_loss += float(restriction_loss.detach()) * batch["B"]
+                    del restriction_loss
                 del batch
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -284,13 +312,15 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
         truth = val.y.numpy().astype(int)
         metrics = score_probabilities(truth, p, 0.5)
         clean_loss, swap_loss = validation_loss(p, truth), validation_loss(p_swap, truth)
+        restricted_stats = model.restriction_stats() if variant == "restricted" else None
         score = {"lossaug": clean_loss + swap_loss, "loss": clean_loss,
                  "acc": -metrics["accuracy"], "auc": -metrics["auc"]}[args.select]
         if not math.isfinite(epoch_loss) or not math.isfinite(score):
             raise FloatingPointError("Non-finite loss; no completed checkpoint will be marked")
         history.append(dict(epoch=epoch, train_loss=epoch_loss / train.G, val_loss=clean_loss,
                             val_swap_loss=swap_loss, selection_score=score, **metrics,
-                            mixstyle=mixstyle_coverage, classswap=classswap_coverage))
+                            mixstyle=mixstyle_coverage, classswap=classswap_coverage,
+                            restricted=restricted_stats))
         if variant == "cmixstyle" and mixstyle_coverage["eligible"] == 0:
             raise RuntimeError("No eligible same-class MixStyle donors: increase micro-batch-size")
         improved = score < best_score - 1e-6
@@ -308,6 +338,11 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
                               strength=args.mixstyle_strength) if variant == "cmixstyle" else None,
                 classswap=dict(same_label=True, different_graph=True, same_relation=True)
                 if variant == "classswap" else None,
+                restricted=dict(semantic_init=args.restricted_semantic_init,
+                                structural_init=args.restricted_structural_init,
+                                semantic_budget=args.restricted_semantic_budget,
+                                semantic_penalty=args.restricted_semantic_penalty)
+                if variant == "restricted" else None,
                 run_signature=run_signature, provenance=provenance,
             ), checkpoint_path)
             del state
@@ -315,11 +350,16 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
             bad += 1
         write_json(record_path, dict(complete=False, run_signature=run_signature,
                                     provenance=provenance, best_epoch=best_epoch, history=history))
+        restricted_log = ""
+        if restricted_stats:
+            restricted_log = (f" | Restricted sem {restricted_stats['semantic_mean']:.3f} "
+                              f"(<.5 {restricted_stats['semantic_below_0_5']}) "
+                              f"struct {restricted_stats['structural_mean']:.3f}")
         print(f"Epoch {epoch:02d} | loss {epoch_loss/train.G:.4f} | val {clean_loss:.4f} "
               f"swap {swap_loss:.4f} | acc {metrics['accuracy']:.4f} | "
               f"MixStyle {mixstyle_coverage['applied']}/{mixstyle_coverage['eligible']} eligible | "
               f"ClassSwap {classswap_coverage['swapped']}/{classswap_coverage['selected']} selected "
-              f"({'best' if improved else 'keep'})", flush=True)
+              f"{restricted_log} ({'best' if improved else 'keep'})", flush=True)
         if bad >= args.patience:
             break
     finished = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
