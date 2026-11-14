@@ -5,13 +5,14 @@ import json
 import math
 from pathlib import Path
 import random
+import tempfile
 
 import torch
 import torch.nn.functional as F
 from torch_geometric.data import Batch
 
 from lisa_gcn.checkpoint import checkpoint_config, load_lisa_checkpoint
-from lisa_gcn.data import build_documents, length_quantile_groups, read_jsonl
+from lisa_gcn.data import build_disk_documents, length_quantile_groups, read_jsonl
 from lisa_gcn.model import LisaGCN, mean_document_logits
 from lisa_gcn.objective import GroupDRO, classification_losses, scale_consistency
 
@@ -64,6 +65,8 @@ def parse_args(argv=None):
     parser.add_argument("--train-json", required=True)
     parser.add_argument("--val-json", required=True)
     parser.add_argument("--output", type=Path, default=Path("model/lisa_gcn"))
+    parser.add_argument("--cache-dir", type=Path,
+                        help="Parent for temporary graph files (default: OUTPUT/graph_cache); cleaned after training.")
     parser.add_argument("--seed", type=int, default=2025)
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--patience", type=int, default=5)
@@ -92,9 +95,17 @@ def main(argv=None):
         raise ValueError("micro-batch-size must not exceed effective-batch-size")
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
-    train = build_documents(read_jsonl(args.train_json))
-    validation = build_documents(read_jsonl(args.val_json))
-    boundaries, train_groups = length_quantile_groups([item.token_count for item in train])
+    cache_parent = args.cache_dir if args.cache_dir is not None else args.output / "graph_cache"
+    cache_parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="lisa-", dir=cache_parent) as cache_directory:
+        train_with_cache(args, device, Path(cache_directory))
+
+
+def train_with_cache(args, device, cache_directory):
+    train = build_disk_documents(read_jsonl(args.train_json), cache_directory / "train")
+    validation = build_disk_documents(read_jsonl(args.val_json), cache_directory / "validation",
+                                      window_sizes=(128,))
+    boundaries, train_groups = length_quantile_groups(train.token_counts)
     model = LisaGCN(hidden_dim=args.hidden_dim, output_dim=args.output_dim, dropout=args.dropout).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     dro = GroupDRO(groups=4, eta=args.group_dro_eta).to(device)

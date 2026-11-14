@@ -20,6 +20,12 @@ source-only train/validation splits.
   `--effective-batch-size` controls the set of document losses combined into
   one GroupDRO update and optimizer step. `--window-chunk-size` independently
   limits how many graph windows enter the GCN in one call.
+- Training builds each document's graph tensors into a temporary disk cache,
+  retaining only labels and token counts in RAM. Training loads documents for
+  the current effective batch; validation loads one document at a time and
+  builds only the 128-token view. Embeddings retain their original float32
+  precision. This bounds dataset RAM, not the autograd memory retained until
+  the effective batch's backward pass.
 - Checkpoints record model, optimizer, source-fitted group boundaries, GroupDRO
   state, config, seed and preprocessing version.
 
@@ -42,6 +48,13 @@ The JSONL input must have `text` and `label`; labels follow the existing
 PRDetect convention. This Core deliberately excludes RGCN/V3 integration,
 syntax-aware swap, EMA/SWA, R-Drop, CMixStyle, restricted embeddings,
 perturbation consistency, ensembles and hyperparameter search.
+
+Temporary graph files are stored under `OUTPUT/graph_cache` by default. Use
+`--cache-dir /path/with/free/space` to select another parent directory. Each
+run uses a fresh subdirectory, removed when training exits normally or raises
+a Python exception; a forcibly killed process can leave files behind. The
+cache uses disk space proportional to the dataset and is rebuilt for each
+run. No legacy graph caches are reused.
 
 ## Verified baseline difference
 

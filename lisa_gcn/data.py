@@ -7,6 +7,7 @@ those caches by node position.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -95,6 +96,61 @@ def build_document(text: str, label: float, document_index: int, window_sizes=(9
 def build_documents(records: Iterable[dict], window_sizes=(96, 128, 160)) -> list[LisaDocument]:
     return [build_document(str(record["text"]), label_of(record), index, window_sizes)
             for index, record in enumerate(records)]
+
+
+class DiskDocumentDataset(Sequence):
+    """Keep only scalar metadata in RAM; load graph tensors on each access.
+
+    Cache files contain tensor dictionaries rather than pickled PyG classes,
+    so they can be read with the weights-only checkpoint loader.
+    """
+
+    def __init__(self, directory: Path, metadata: list[tuple[float, int]]):
+        self.directory = Path(directory)
+        self.metadata = metadata
+
+    @property
+    def token_counts(self):
+        return [count for _, count in self.metadata]
+
+    def __len__(self):
+        return len(self.metadata)
+
+    def __getitem__(self, index):
+        from torch_geometric.data import Data
+        from .checkpoint import load_lisa_checkpoint
+
+        if isinstance(index, slice):
+            return [self[item] for item in range(*index.indices(len(self)))]
+        if index < 0:
+            index += len(self)
+        if index < 0 or index >= len(self):
+            raise IndexError(index)
+        label, token_count = self.metadata[index]
+        state = load_lisa_checkpoint(self.directory / f"{index}.pt", map_location="cpu")
+        graphs = {scale: [Data.from_dict(graph) for graph in view]
+                  for scale, view in state.items()}
+        return LisaDocument(label=label, token_count=token_count, graphs_by_scale=graphs)
+
+
+def build_disk_documents(records: Iterable[dict], directory: str | Path,
+                         window_sizes=(96, 128, 160)) -> DiskDocumentDataset:
+    """Build and release one document at a time into a per-run cache directory."""
+    import torch
+
+    directory = Path(directory)
+    # A fresh directory prevents accidental reuse of graphs from another run.
+    directory.mkdir(parents=True, exist_ok=False)
+    metadata = []
+    for index, record in enumerate(records):
+        document = build_document(str(record["text"]), label_of(record), index, window_sizes)
+        torch.save({scale: [graph.to_dict() for graph in view]
+                    for scale, view in document.graphs_by_scale.items()}, directory / f"{index}.pt")
+        metadata.append((document.label, document.token_count))
+        del document
+    if not metadata:
+        raise ValueError("non-empty records are required")
+    return DiskDocumentDataset(directory, metadata)
 
 
 def length_quantile_groups(token_counts: list[int], groups: int = 4):

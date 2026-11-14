@@ -38,10 +38,10 @@ class GroupDRO:
         with torch.no_grad():
             self.log_q[present] += self.eta * means[present].detach()
             self.log_q -= self.log_q.max()
-        current = self.weights.to(per_document_loss.device)
-        normalized_present = current * present
-        normalized_present = normalized_present / normalized_present.sum().clamp_min(torch.finfo(current.dtype).eps)
-        return (normalized_present * means).sum(), means, present
+        # Normalize in log-space over observed groups only. Normalizing global
+        # probabilities can underflow when the dominant group is absent.
+        current = torch.softmax(self.log_q[present], dim=0).to(per_document_loss.device)
+        return (current * means[present]).sum(), means, present
 
 
 def scale_consistency(first_logits: torch.Tensor, second_logits: torch.Tensor) -> torch.Tensor:
