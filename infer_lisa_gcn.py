@@ -3,6 +3,7 @@
 import argparse
 import torch
 
+from lisa_gcn.checkpoint import load_lisa_checkpoint
 from lisa_gcn.data import build_document
 from lisa_gcn.model import LisaGCN
 from train_lisa_gcn import document_logits
@@ -16,7 +17,7 @@ def main():
     parser.add_argument("--cpu", action="store_true")
     args = parser.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
-    state = torch.load(args.checkpoint, map_location=device, weights_only=True)
+    state = load_lisa_checkpoint(args.checkpoint, map_location=device)
     config = state["config"]
     model = LisaGCN(hidden_dim=config["hidden_dim"], output_dim=config["output_dim"], dropout=config["dropout"]).to(device)
     model.load_state_dict(state["model"])

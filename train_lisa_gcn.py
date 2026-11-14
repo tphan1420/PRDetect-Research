@@ -10,6 +10,7 @@ import torch
 import torch.nn.functional as F
 from torch_geometric.data import Batch
 
+from lisa_gcn.checkpoint import checkpoint_config, load_lisa_checkpoint
 from lisa_gcn.data import build_documents, length_quantile_groups, read_jsonl
 from lisa_gcn.model import LisaGCN, mean_document_logits
 from lisa_gcn.objective import GroupDRO, classification_losses, scale_consistency
@@ -101,7 +102,7 @@ def main(argv=None):
     args.output.mkdir(parents=True, exist_ok=True)
     checkpoint_path = args.output / f"lisa_gcn_seed{args.seed}.pt"
     if args.resume:
-        state = torch.load(args.resume, map_location=device, weights_only=True)
+        state = load_lisa_checkpoint(args.resume, map_location=device)
         model.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
         dro.log_q = state["group_dro_log_q"].to(device)
@@ -137,7 +138,7 @@ def main(argv=None):
         if improved:
             best, bad = val_loss, 0
             torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(), "epoch": epoch,
-                        "best_val_loss": best, "bad_epochs": bad, "config": vars(args),
+                        "best_val_loss": best, "bad_epochs": bad, "config": checkpoint_config(args),
                         "group_boundaries": boundaries, "group_dro_log_q": dro.log_q.cpu(),
                         "preprocessing_version": "lisa-sentence-window-v1", "history": history}, checkpoint_path)
         else:

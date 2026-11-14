@@ -1,4 +1,7 @@
 import importlib.util
+from argparse import Namespace
+from pathlib import Path
+import tempfile
 import unittest
 
 from lisa_gcn.windowing import SentenceSpan, plan_sentence_windows
@@ -21,6 +24,19 @@ class WindowPlannerTests(unittest.TestCase):
     def test_rejects_unverified_gaps(self):
         with self.assertRaises(ValueError):
             plan_sentence_windows(5, [SentenceSpan(0, 2), SentenceSpan(3, 5)], 4)
+
+
+@unittest.skipUnless(importlib.util.find_spec("torch"), "requires torch")
+class CheckpointTests(unittest.TestCase):
+    def test_checkpoint_loader_accepts_legacy_path_metadata(self):
+        import torch
+        from lisa_gcn.checkpoint import checkpoint_config, load_lisa_checkpoint
+
+        with tempfile.NamedTemporaryFile(suffix=".pt") as handle:
+            torch.save({"config": {"output": Path("model/lisa_gcn")}, "tensor": torch.tensor([1.0])}, handle.name)
+            state = load_lisa_checkpoint(handle.name, map_location="cpu")
+        self.assertEqual(str(state["config"]["output"]), "model/lisa_gcn")
+        self.assertEqual(checkpoint_config(Namespace(output=Path("model/lisa_gcn")))["output"], "model/lisa_gcn")
 
 
 @unittest.skipUnless(importlib.util.find_spec("torch") and importlib.util.find_spec("torch_geometric"), "requires torch and torch_geometric")
