@@ -1,0 +1,15 @@
+{
+  "window_sizes": [96, 128, 160],
+  "inference_window_size": 128,
+  "hidden_dim": 256,
+  "output_dim": 64,
+  "dropout": 0.5,
+  "optimizer": "Adam",
+  "learning_rate": 0.0001,
+  "weight_decay": 0.00001,
+  "alpha": 0.1,
+  "scale_warmup_epochs": 2,
+  "group_dro_eta": 0.01,
+  "length_groups": 4,
+  "preprocessing_version": "lisa-sentence-window-v1"
+}
