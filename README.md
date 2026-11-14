@@ -194,6 +194,34 @@ python detect.py --text "There are many factors that contribute to the intellige
 
 ---
 
+## V3 Core baseline
+
+The standalone V3 Core is Quang's basis-decomposed RGCN baseline with the
+original structural features, `pool3` readout, EMA, `lossaug` checkpoint
+selection, and syntax-aware swap.  Build the HC3 graph caches first (the graph
+format uses the legacy RoBERTa node embeddings):
+
+```bash
+python building_graph.py --file hc3_train hc3_val
+python train_v3.py --variants baseline --train-file hc3_train --val-file hc3_val \
+  --struct-mode low --seeds 2021 2022 2023 2024 2025
+```
+
+Evaluate an existing Quang V3 checkpoint without retraining.  `table2`,
+`table3`, and `table4` may be selected individually; `full` runs all three.
+
+```bash
+python evaluate_v3_quang.py run --variant quang --checkpoint-dir model/V3_quang \
+  --train-domain hc3 --suite full --struct-mode low --seeds 2021 2022 2023 2024 2025
+```
+
+For checkpoints produced by `train_v3.py`, use `--variant baseline` and point
+`--checkpoint-dir` at that trainer's output directory.  Evaluation reports
+accuracy, AUC, F1, class recalls, confusion matrices, and per-sample
+probabilities at the fixed 0.5 protocol threshold.
+
+---
+
 ## 📊 6. Experimental Results (NAACL 2025 Paper)
 
 ### Robustness Against Synonym Replacement Perturbations

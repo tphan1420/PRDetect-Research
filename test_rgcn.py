@@ -110,7 +110,14 @@ except ImportError:
 
 from model.RGCN import RGCN2, RGCN4, RelationalGCN
 from dep_vocab import get_default_vocab
-from rdrop import require_v1_graph
+
+
+def require_v1_graph(graph):
+    """Reject known non-V1 cache formats before constructing legacy batches."""
+    if any(key in graph for key in (
+        'encoder_metadata', 'schema_version', 'all_cls_embeddings', 'all_quality', 'quality_features',
+    )):
+        raise ValueError('This runner requires legacy V1 graphs, not aligned/V2 caches.')
 
 
 def create_pyg_data_list(graph_dict):
@@ -304,7 +311,7 @@ if __name__ == '__main__':
                         help="Lưu kết quả kiểm thử vào file text")
     parser.add_argument('--cpu', action='store_true', help="Chạy trên CPU")
 
-    parser.add_argument('--checkpoint', default=None, help='Explicit baseline or R-Drop RGCN checkpoint')
+    parser.add_argument('--checkpoint', default=None, help='Explicit RGCN checkpoint')
     parser.add_argument('--graph_dir', default='./graph_data', help='V1 graph cache directory')
     parser.add_argument('--result_dir', default='./result', help='Test log directory')
     parser.add_argument('--report_json', default=None, help='Save metrics, confusion matrix and per-sample scores')

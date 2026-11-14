@@ -1,11 +1,8 @@
 """Inference-only port of Quang\'s PRDetect RGCN v3.
 
 Source: docs/PRDetect_RGCN_v3_tong_hop.md (rgcn_plus.py).
-Preserves the checkpoint architecture and legacy relation-half assumptions for
-``low``/``high`` modes.  ``directed`` is an opt-in schema for graphs produced
-by building_graph.py: every non-self edge is dependent -> head. Optional
-feature_transform is an identity extension point unless explicitly supplied by
-an experimental subclass.
+Preserves the checkpoint architecture, legacy relation-half assumptions,
+feature conversion and clipping. No training or architecture changes.
 Use evaluate_v3_quang.py; mode is not stored in the supplied checkpoints.
 """
 
@@ -64,40 +61,16 @@ def read_raw(path):
 
 
 def fwd_mask(et, R, mode):
-    if mode == "directed":
-        # building_graph.py writes one dependent -> head edge per token. Its
-        # relation IDs identify dependency labels, not direction halves.
-        return np.ones_like(et, dtype=bool)
     half = R // 2
     if mode == "low":
         return et < half
-    if mode == "high":
-        return (et >= half) & (et < 2 * half)
-    raise ValueError(f"Unknown structural mapping mode: {mode}")
+    return (et >= half) & (et < 2 * half)
 
 
 def parent_array(n, src, dst, et, R, mode):
     m = fwd_mask(et, R, mode) & (src != dst)
-    if mode == "directed" and np.unique(src[m]).size != int(m.sum()):
-        raise ValueError("Directed structural mapping requires at most one non-self parent edge per node")
     par = -np.ones(n, dtype=np.int64)
     par[src[m]] = dst[m]
-    if mode == "directed":
-        # A parsed dependency document is a forest (possibly with one root
-        # per sentence).  Reject cycles before struct_features would cap a
-        # non-terminating walk at MAXD and turn malformed input into features.
-        state = np.zeros(n, dtype=np.int8)  # 0 unseen, 1 current walk, 2 done
-        for start in range(n):
-            if state[start]:
-                continue
-            trail, current = [], start
-            while current >= 0 and state[current] == 0:
-                state[current] = 1
-                trail.append(current)
-                current = par[current]
-            if current >= 0 and state[current] == 1:
-                raise ValueError("Directed structural mapping requires an acyclic parent forest")
-            state[trail] = 2
     return par, int(m.sum()), np.unique(src[m]).size
 
 
@@ -173,8 +146,6 @@ class GraphSet:
             e = np.asarray(ei[i]).reshape(2, -1).astype(np.int64)
             t = np.asarray(et[i]).reshape(-1).astype(np.int64)
             if t.size and t.max() >= R:
-                if mode == "directed":
-                    raise ValueError("Directed structural mapping refuses relation IDs outside training R")
                 t = np.minimum(t, R - 1)
             st, gf = struct_features(n, e[0], e[1], t, R, mode)
             X.append(x); nn_.append(n); ec.append(e.shape[1])
@@ -267,14 +238,11 @@ class Net(nn.Module):
         self.layers = nn.ModuleList([RGCNLayer(d, R, nb) for _ in range(L)])
         self.norms = nn.ModuleList([nn.LayerNorm(d) for _ in range(L)])
         self.drop = nn.Dropout(p)
-        if readout == "meanlogit":      # đúng kiểu PRDetect gốc: điểm từng nút rồi lấy trung bình
-            self.head = nn.Linear(d, 1)
-        else:
-            self.gate = nn.Linear(d, 1)
-            ind = 3 * d + (N_GF if use_gfeat else 0)
-            self.mlp = nn.Sequential(nn.Linear(ind, d), nn.GELU(), nn.Dropout(p), nn.Linear(d, 1))
+        self.gate = nn.Linear(d, 1)
+        ind = 3 * d + (N_GF if use_gfeat else 0)
+        self.mlp = nn.Sequential(nn.Linear(ind, d), nn.GELU(), nn.Dropout(p), nn.Linear(d, 1))
 
-    def _augment(self, x, src, dst, rel, bidx, B, mode, gen, labels=None):
+    def _augment(self, x, src, dst, rel, bidx, B, mode, gen):
         """Nhiễu mức đặc trưng mô phỏng thay từ: mỗi đồ thị chọn tỉ lệ rho~U(0,aug_max) nút;
         'swap' = thay vector bằng vector của một nút khác CÙNG nhãn quan hệ phụ thuộc (giữ vai trò cú pháp),
         'mask' = thay bằng vector mask học được. Cấu trúc cây không đổi."""
@@ -309,11 +277,11 @@ class Net(nn.Module):
             x_new = torch.where(use_mask.unsqueeze(1), self.mask_emb.to(x.dtype).unsqueeze(0).expand_as(x), x_new)
         return x_new
 
-    def forward(self, b, aug_mode=None, gen=None, feature_transform=None, structural_transform=None):
+    def forward(self, b, aug_mode=None, gen=None):
         x, src, dst, rel, bidx, B = b["x"], b["src"], b["dst"], b["rel"], b["bidx"], b["B"]
         N = x.size(0)
         if aug_mode and aug_mode != "none":
-            x = self._augment(x, src, dst, rel, bidx, B, aug_mode, gen, b.get("y"))
+            x = self._augment(x, src, dst, rel, bidx, B, aug_mode, gen)
         if self.training and self.edge_drop > 0 and src.numel() > 0:
             keep = torch.rand(src.numel(), device=src.device) >= self.edge_drop
             src, dst, rel = src[keep], dst[keep], rel[keep]
@@ -321,22 +289,13 @@ class Net(nn.Module):
         cnt = torch.bincount(key, minlength=N * self.R).float()
         norm = 1.0 / cnt[key].clamp(min=1.0)
         h = self.ln0(self.proj(self.drop_in(x)))
-        if feature_transform is not None:
-            h = feature_transform(h, b)
         if self.use_struct:
             st = b["st"]
             s = torch.cat([self.e_dep(st[:, 0]), self.e_chi(st[:, 1]), self.e_dis(st[:, 2])], 1)
-            s = self.sproj(s)
-            if structural_transform is not None:
-                s = structural_transform(s, b)
-            h = h + s
+            h = h + self.sproj(s)
         h = F.gelu(h)
         for lyr, ln in zip(self.layers, self.norms):
             h = h + self.drop(F.gelu(ln(lyr(h, src, dst, rel, norm))))
-        if self.readout == "meanlogit":
-            sc = self.head(h).squeeze(-1).float()
-            cn = torch.zeros(B, device=h.device).index_add_(0, bidx, torch.ones_like(sc))
-            return torch.zeros(B, device=h.device).index_add_(0, bidx, sc) / cn.clamp(min=1.0)
         h = h.float()
         cn = torch.zeros(B, device=h.device).index_add_(0, bidx, torch.ones(N, device=h.device)).clamp(min=1.0)
         mean = torch.zeros(B, h.size(1), device=h.device).index_add_(0, bidx, h) / cn.unsqueeze(1)

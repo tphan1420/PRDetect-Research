@@ -1,4 +1,4 @@
-"""Test Quang's V3 or controlled baseline/CMixStyle checkpoints; never train.
+"""Evaluate V3 Core checkpoints; never train.
 
 The orchestrator uses only the standard library. Graph building and inference
 run in separate processes so the frozen encoder and multiple classifiers never
@@ -137,7 +137,7 @@ def find_checkpoints(root, seeds, variant="quang"):
         raise ValueError("Provide at least one seed, without duplicates")
     found = {}
     for seed in seeds:
-        if variant not in ("quang", "baseline", "meanlogit", "classswap", "restricted", "cmixstyle", "structmap"):
+        if variant not in ("quang", "baseline"):
             raise ValueError(f"Unknown V3 variant: {variant}")
         stem = (f"p3fin_V1_swap_s{seed}_seed{seed}" if variant == "quang"
                 else f"v3_{variant}_seed{seed}")
@@ -161,14 +161,6 @@ def make_config(args):
     paths = find_checkpoints(args.checkpoint_dir, args.seeds, variant)
     files = [MODEL_SOURCE, REPO / "building_graph.py", REPO / "dep_vocab.py",
              REPO / "dep_vocab.json"]
-    if variant == "classswap":
-        files += [REPO / "model/V3ClassSwap.py"]
-    elif variant == "restricted":
-        files += [REPO / "model/V3Restricted.py"]
-    elif variant == "cmixstyle":
-        files += [REPO / "model/V3CMixStyle.py", REPO / "model/v3_mixstyle.py"]
-    elif variant == "structmap":
-        files += [REPO / "model/V3StructuralMap.py"]
     return {
         "model": "Quang_v3_V1_swap" if variant == "quang" else f"v3_{variant}",
         "variant": variant, "train_domain": args.train_domain, "seeds": args.seeds,
@@ -202,48 +194,24 @@ def _load_model(config, seed, device):
     if a["train_file"] != expected_train or a["seeds"] != [seed]:
         raise ValueError(f"Checkpoint training dataset/seed mismatch: {path}")
     variant = config.get("variant", "quang")
-    extra = {}
     if variant == "quang":
         if a.get("aug") != "swap" or a.get("cons", 0) != 0:
             raise ValueError(f"Expected V1_swap without consistency: {path}")
-        if checkpoint.get("method") in ("v3_baseline", "v3_meanlogit", "v3_classswap", "v3_restricted", "v3_cmixstyle", "v3_structmap"):
+        if checkpoint.get("method") == "v3_baseline":
             raise ValueError("New ablation checkpoint requires its explicit --variant")
     else:
-        if checkpoint.get("method") != f"v3_{variant}":
+        if checkpoint.get("method") != "v3_baseline":
             raise ValueError(f"Checkpoint/variant mismatch: {path}")
         if checkpoint.get("training_complete") is not True:
             raise ValueError(f"Training did not complete: {path}; saved best epoch is incomplete")
         if checkpoint.get("struct_mode") != config["struct_mode"]:
             raise ValueError("--struct-mode differs from the checkpoint training mode")
-        if variant == "meanlogit" and a.get("readout") != "meanlogit":
-            raise ValueError(f"MeanLogit checkpoint does not record meanlogit readout: {path}")
-        if variant == "classswap":
-            from model.V3ClassSwap import ClassPreservingSyntaxSwapNet
-            Net = ClassPreservingSyntaxSwapNet
-        elif variant == "structmap":
-            from model.V3StructuralMap import CorrectedStructuralMappingNet
-            Net = CorrectedStructuralMappingNet
-        elif variant == "restricted":
-            from model.V3Restricted import StructureGuidedRestrictedNet
-            Net = StructureGuidedRestrictedNet
-            if not checkpoint.get("restricted"):
-                raise ValueError(f"Missing restricted-embedding settings: {path}")
-            extra = {
-                "semantic_init": checkpoint["restricted"]["semantic_init"],
-                "structural_init": checkpoint["restricted"]["structural_init"],
-                "semantic_budget": checkpoint["restricted"]["semantic_budget"],
-                "semantic_penalty": checkpoint["restricted"]["semantic_penalty"],
-            }
-        elif variant == "cmixstyle":
-            from model.V3CMixStyle import CMixStyleNet
-            Net = CMixStyleNet
-            extra = {f"mixstyle_{k}": v for k, v in checkpoint["mixstyle"].items()}
     model = Net(
         int(checkpoint["R"]), d=a["hidden"], nb=a["num_bases"], L=a["layers"],
         p=a["dropout"], p_in=a["in_dropout"], edge_drop=a["edge_drop"],
         use_struct=bool(a["struct"]), use_gfeat=bool(a["gfeat"]),
         readout=a["readout"], aug=a.get("aug", "none"),
-        aug_max=a.get("aug_max", 0.35), mode=config["struct_mode"], **extra,
+        aug_max=a.get("aug_max", 0.35), mode=config["struct_mode"],
     )
     model.load_state_dict(checkpoint["state"], strict=True)
     return path, checkpoint, model.to(device).eval()
@@ -262,7 +230,6 @@ def inspect_checkpoints(config):
             "arguments": checkpoint["args"], "struct_mode_used": config["struct_mode"],
             "parameters": sum(p.numel() for p in model.parameters()),
             "method": checkpoint.get("method", "Quang_v3_V1_swap"),
-            "mixstyle": checkpoint.get("mixstyle"),
             "best_epoch": checkpoint.get("best_epoch"),
         }
         rows.append(row)
@@ -512,7 +479,7 @@ def export_archive(results, archive, cases, seeds, extra_cases=()):
             output.write(path, str(Path("result") / path.relative_to(results)))
         output.write(Path(__file__), "evaluate_v3_quang.py")
         output.write(MODEL_SOURCE, "model/QuangV3.py")
-        for relative in ("model/V3ClassSwap.py", "model/V3Restricted.py", "model/V3CMixStyle.py", "model/v3_mixstyle.py", "train_v3.py"):
+        for relative in ("train_v3.py",):
             source = REPO / relative
             if source.is_file():
                 output.write(source, relative)
@@ -579,13 +546,13 @@ def build_parser():
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("inspect", "run"):
         p = sub.add_parser(command)
-        p.add_argument("--variant", choices=("quang", "baseline", "meanlogit", "classswap", "restricted", "cmixstyle", "structmap"), default="quang")
+        p.add_argument("--variant", choices=("quang", "baseline"), default="quang")
         p.add_argument("--train-domain", choices=tuple(TRAINING_DOMAINS), default="hc3",
                        help="Training domain; determines in-domain Table 2 and Table 3 direction")
         p.add_argument("--checkpoint-dir", default=str(REPO / "model/V3_quang"))
         p.add_argument("--seeds", type=int, nargs="+", default=DEFAULT_SEEDS)
         p.add_argument("--batch-size", type=positive_int, default=4)
-        p.add_argument("--struct-mode", choices=("low", "high", "directed"), default="low")
+        p.add_argument("--struct-mode", choices=("low", "high"), default="low")
         p.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
         p.add_argument("--graph-budget-root", help="Also count caches recursively under this workflow root")
         if command == "inspect":

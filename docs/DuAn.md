@@ -1,4 +1,30 @@
-# PRDetect: Nhận diện văn bản do LLM tạo ra dựa trên Cây cú pháp kháng nhiễu (Perturbation-Robust LLM-generated Text Detection Based on Syntax Tree)
+# PRDetect Research — tài liệu dự án
+
+## Trạng thái hiện tại: V3 Core
+
+Baseline đang được duy trì là **Quang V3 / V1_swap**: RGCN basis-decomposed,
+legacy RoBERTa node embeddings, structural features gốc (depth, children,
+distance), syntax-aware swap gốc, `pool3`, AdamW, warmup/cosine, EMA và
+`lossaug` checkpoint selection.
+
+Tài liệu vận hành:
+
+- [V3 Core baseline](BaoCao_V3_Baseline_CaiTien.md)
+- [Nguồn tổng hợp Quang V3](PRDetect_RGCN_v3_tong_hop.md)
+- [Kaggle runbook Table 3/4](Kaggle_V3_Quang_Table3_Table4.md)
+- [Lịch sử cải tiến](Context_LichSuCaiTien_PRDetect.md)
+- [V3 Core cleanup audit](V3_CORE_CLEANUP_AUDIT.md)
+- [Archive tài liệu và kết quả cũ](archive/README.md)
+
+Entry point mã nguồn: [`model/QuangV3.py`](../model/QuangV3.py),
+[`train_v3.py`](../train_v3.py), [`evaluate_v3_quang.py`](../evaluate_v3_quang.py).
+Lệnh chạy hiện hành nằm trong [`README.md`](../README.md).
+
+---
+
+## Tham khảo nền tảng và lịch sử PRDetect
+
+### PRDetect: Nhận diện văn bản do LLM tạo ra dựa trên Cây cú pháp kháng nhiễu (Perturbation-Robust LLM-generated Text Detection Based on Syntax Tree)
 
 > **Tài liệu tham khảo chính:** Bài báo *"PRDetect: Perturbation-Robust LLM-generated Text Detection Based on Syntax Tree"*, công bố tại hội nghị quốc tế **Findings of the Association for Computational Linguistics: NAACL 2025** (trang 8305–8316).  
 > **Nhóm tác giả:** Xiang Li, Zhiyi Yin, Hexiang Tan, Shaoling Jing, Du Su, Yi Cheng, Huawei Shen, Fei Sun (Viện Công nghệ Tính toán - Viện Hàn lâm Khoa học Trung Quốc CAS, Đại học UCAS).  
@@ -248,7 +274,7 @@ File sau khi chuyển đổi sẽ tự động nằm ở `data/original_text/<t�
    *File đồ thị sinh ra sẽ tự động được lưu vào `graph_data/<tên_file>.pkl` bao gồm cả `all_edge_type`.*
 
 2. **Bước 2: Huấn luyện mô hình**  
-   - **Cách 1: Huấn luyện mô hình RGCN đa quan hệ (Đề xuất cải tiến Mục 3 trong `docs/Update.md`)**:
+   - **Cách 1: Huấn luyện mô hình RGCN đa quan hệ** (xem tài liệu lịch sử tại `archive/proposals/Update.md`):
      ```bash
      # Huấn luyện RGCN 2 tầng với basis decomposition:
      python rgcn.py --dataset hc3 --seed 2024 --epochs 40 --lr 0.0001 --num_layers 2 --num_bases 30

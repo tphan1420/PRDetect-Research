@@ -117,7 +117,14 @@ except ImportError:
 
 from model.RGCN import RGCN2, RGCN4, RelationalGCN
 from dep_vocab import get_default_vocab
-from rdrop import training_objective, validate_alpha, require_v1_graph
+
+
+def require_v1_graph(graph):
+    """Reject known non-V1 cache formats before constructing legacy batches."""
+    if any(key in graph for key in (
+        'encoder_metadata', 'schema_version', 'all_cls_embeddings', 'all_quality', 'quality_features',
+    )):
+        raise ValueError('This runner requires legacy V1 graphs, not aligned/V2 caches.')
 
 
 def load_graph_data(file_path):
@@ -166,7 +173,6 @@ def create_pyg_data_list(graph_dict):
 
 
 def train_rgcn(args):
-    rdrop_alpha = validate_alpha(getattr(args, 'rdrop_alpha', 0.0))
     if args.epochs < 1:
         raise ValueError('epochs must be at least 1.')
     # Thiết lập Random Seed
@@ -253,10 +259,6 @@ def train_rgcn(args):
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     criterion = nn.BCELoss()
-    print(f'-> R-Drop alpha={rdrop_alpha} '
-          f"({'two forwards per batch' if rdrop_alpha > 0 else 'baseline: one forward per batch'})")
-    if rdrop_alpha > 0 and args.dropout == 0:
-        print('[Warning] dropout=0: R-Drop has no stochastic dropout views.')
 
     # Khởi tạo TensorBoard nếu có thư viện
     writer = None
@@ -273,8 +275,7 @@ def train_rgcn(args):
     best_epoch = 0
     patience_counter = args.patience
     os.makedirs("./model", exist_ok=True)
-    # Never overwrite a pre-existing V1 baseline by merely enabling R-Drop.
-    run_name = args.dataset if rdrop_alpha == 0 else f'{args.dataset}_rdrop_a{rdrop_alpha:g}'
+    run_name = args.dataset
     model_save_path = args.save_path or f"./model/{run_name}_rgcn_model_{seed}.pth"
     Path(model_save_path).parent.mkdir(parents=True, exist_ok=True)
     history = []
@@ -285,8 +286,6 @@ def train_rgcn(args):
         # 1. Quá trình Huấn luyện (Training) với Mini-Batching
         model.train()
         epoch_loss = 0.0
-        epoch_bce = 0.0
-        epoch_kl = 0.0
         correct_predictions = 0
         total_train_samples = 0
 
@@ -295,9 +294,8 @@ def train_rgcn(args):
             batch = batch.to(device)
 
             optimizer.zero_grad()
-            loss, outputs, bce_loss, kl_loss = training_objective(
-                model, batch, batch.y.float().view(-1, 1), criterion, rdrop_alpha,
-            )
+            outputs = model(batch)
+            loss = criterion(outputs, batch.y.float().view(-1, 1))
             loss.backward()
             optimizer.step()
 
@@ -305,8 +303,6 @@ def train_rgcn(args):
             total_train_samples += bsz
             loss_val = loss.item()
             epoch_loss += loss_val * bsz
-            epoch_bce += bce_loss.item() * bsz
-            epoch_kl += kl_loss.item() * bsz
 
             prediction = (outputs >= 0.5).long()
             correct = (prediction == batch.y.view(-1, 1)).sum().item()
@@ -316,8 +312,6 @@ def train_rgcn(args):
 
         train_loss = epoch_loss / total_train_samples
         train_acc = correct_predictions / total_train_samples
-        train_bce = epoch_bce / total_train_samples
-        train_kl = epoch_kl / total_train_samples
 
         # 2. Quá trình Kiểm định (Validation) với Mini-Batching
         model.eval()
@@ -343,12 +337,8 @@ def train_rgcn(args):
         val_loss = val_epoch_loss / total_val_samples
         val_acc = val_correct / total_val_samples
         history.append({'epoch': epoch + 1, 'train_loss': train_loss,
-                        'train_bce': train_bce, 'train_kl': train_kl,
-                        'weighted_kl': rdrop_alpha * train_kl, 'train_accuracy': train_acc,
-                        'val_loss': val_loss, 'val_accuracy': val_acc})
-        if rdrop_alpha > 0:
-            print(f'[R-Drop] BCE: {train_bce:.6f} | KL: {train_kl:.6f} | '
-                  f'alpha*KL: {rdrop_alpha * train_kl:.6f}')
+                        'train_accuracy': train_acc, 'val_loss': val_loss,
+                        'val_accuracy': val_acc})
 
         print(f"[Epoch {epoch+1}] Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f}")
 
@@ -357,8 +347,6 @@ def train_rgcn(args):
             writer.add_scalar("Acc/train", train_acc, epoch)
             writer.add_scalar("Loss/val", val_loss, epoch)
             writer.add_scalar("Acc/val", val_acc, epoch)
-            writer.add_scalar('Loss/train_bce', train_bce, epoch)
-            writer.add_scalar('Loss/train_kl', train_kl, epoch)
 
         # Kiểm tra lưu checkpoint tốt nhất
         if val_acc >= val_max_acc:
@@ -378,7 +366,7 @@ def train_rgcn(args):
     if writer:
         writer.close()
     summary = {
-        'method': 'rdrop' if rdrop_alpha > 0 else 'baseline', 'rdrop_alpha': rdrop_alpha,
+        'method': 'baseline',
         'arguments': vars(args), 'checkpoint': str(model_save_path), 'threshold': 0.5,
         'best_epoch': best_epoch, 'best_val_accuracy': val_max_acc, 'history': history,
         'selection': 'validation accuracy, latest tied epoch; unchanged V1 early stopping',
@@ -450,8 +438,7 @@ def evaluate_rgcn(model, model_path, test_file_path, device, args):
     log_line = f"{args.test_file}\tacc: {test_acc:.4f}\tauc: {auc:.4f}\tf1: {test_f1:.4f}\tseed: {args.seed}\tmodel: {args.dataset}_rgcn_{args.num_layers}layer\t{datetime.now()}\n"
     
     with (result_dir / 'test_result.txt').open('a', encoding='utf-8') as f:
-        f.write(log_line.rstrip('\n') + f'\trdrop_alpha: {getattr(args, "rdrop_alpha", 0.0)}'
-                f'\tcheckpoint: {model_path}\n')
+        f.write(log_line.rstrip('\n') + f'\tcheckpoint: {model_path}\n')
     print(f"-> Test log: {result_dir / 'test_result.txt'}")
 
 
@@ -498,8 +485,6 @@ if __name__ == '__main__':
     parser.add_argument('--cpu', action='store_true',
                         help="Bắt buộc sử dụng CPU thay vì GPU")
 
-    parser.add_argument('--rdrop_alpha', type=float, default=0.0,
-                        help='R-Drop weight; 0 keeps original one-forward BCE baseline')
     parser.add_argument('--graph_dir', default='./graph_data', help='V1 graph cache directory')
     parser.add_argument('--result_dir', default='./result', help='Test log directory')
 

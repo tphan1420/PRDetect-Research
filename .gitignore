@@ -13,5 +13,5 @@ result/*
 !result/test_result.txt
 !result/RGCN_test_result.txt
 .pytest_cache/
-model/rdrop/
 model/V3_quang
+model/rdrop/

@@ -91,7 +91,7 @@ def summary(items):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=ROOT / "docs/Table3_Audit_Data.json")
+    parser.add_argument("--output", type=Path, default=ROOT / "docs/archive/results/Table3_Audit_Data.json")
     args = parser.parse_args()
     paths = {
         "old_new": ROOT / "result/table3_rgcn_old_vs_new_2026.zip",
