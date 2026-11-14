@@ -9,6 +9,9 @@ datasets/
 __pycache__/
 *.pyc
 graph_data/
+prism_graph_data/
+model/prism_*.pt
+model/prism_*.train.json
 result/*
 !result/test_result.txt
 !result/RGCN_test_result.txt
