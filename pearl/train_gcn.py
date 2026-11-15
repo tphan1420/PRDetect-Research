@@ -1,4 +1,4 @@
-"""Warm-start GCN and jointly fine-tune clean classification plus retention."""
+"""Joint PEARL training with a random GCN or a baseline checkpoint."""
 import copy
 import json
 import time
@@ -12,6 +12,7 @@ from .embeddings import LegacyEncoder, embedding_cache
 from .metrics import classification_metrics
 from .train_edge import load_edge, load_partition
 from .weighted_gcn import PEARLGCN, baseline_from_state
+from model.GCN2 import GCN2
 
 
 def save_checkpoint(path, model, metadata):
@@ -54,13 +55,22 @@ def train(cfg):
     predictor, features, edge_state = load_edge(Path(cfg["edge_output"]) / "edge.pt", cfg["device"])
     if edge_state["prepared_manifest_sha256"] != file_hash(Path(cfg["prepared"]) / "manifest.json"):
         raise ValueError("Edge predictor was trained with a different prepared manifest")
-    state = torch.load(cfg["baseline_checkpoint"], map_location="cpu", weights_only=True)
-    base = baseline_from_state(state)
+    initialization = cfg.get("gcn_initialization", "checkpoint")
+    baseline_hash = None
+    if initialization == "scratch":
+        base = GCN2(cfg.get("input_dim", 768), cfg.get("hidden_dim", 256), cfg.get("output_dim", 64))
+    elif initialization == "checkpoint":
+        state = torch.load(cfg["baseline_checkpoint"], map_location="cpu", weights_only=True)
+        base = baseline_from_state(state)
+        baseline_hash = file_hash(cfg["baseline_checkpoint"])
+    else:
+        raise ValueError("gcn_initialization must be 'scratch' or 'checkpoint'")
     model = PEARLGCN(base, predictor, features, cfg.get("epsilon", .8)).to(cfg["device"])
     encoder = LegacyEncoder(cfg)
     train_x = embedding_cache(cfg, docs, "train", encoder)
     val_x = embedding_cache(cfg, val, "validation", encoder)
-    metadata = dict(config=cfg, baseline_sha256=file_hash(cfg["baseline_checkpoint"]),
+    metadata = dict(config=cfg, baseline_sha256=baseline_hash, gcn_initialization=initialization,
+                    initialization_seed=cfg["seed"],
                     prepared_manifest_sha256=file_hash(Path(cfg["prepared"]) / "manifest.json"),
                     edge_checkpoint_sha256=file_hash(Path(cfg["edge_output"]) / "edge.pt"),
                     encoder=encoder.metadata, parser_hash=manifest["parser_hash"], parser_meta=manifest["parser_meta"],
@@ -124,5 +134,5 @@ def train(cfg):
 
 
 if __name__ == "__main__":
-    args = config_cli("Joint PEARL-GCN fine-tuning from an unchanged baseline checkpoint").parse_args()
+    args = config_cli("Train PEARL-GCN from scratch or fine-tune a baseline checkpoint").parse_args()
     train(load_config(args.config))

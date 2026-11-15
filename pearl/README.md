@@ -1,5 +1,11 @@
 # PEARL-Lite cho PRDetect
 
+Notebook Kaggle [02 — train từ đầu](../notebooks/kaggle/pearl/02_pearl_lite_from_scratch_hc3_to_gpt35_0pct_hc3_insert25.ipynb)
+train predictor rồi khởi tạo GCN ngẫu nhiên và train joint, không cần baseline checkpoint.
+Config dùng `gcn_initialization="scratch"`, kiến trúc mặc định `input_dim=768`, `hidden_dim=256`, `output_dim=64`.
+Chế độ cũ `gcn_initialization="checkpoint"` vẫn là mặc định để notebook 01 giữ nguyên hành vi.
+Metadata checkpoint ghi rõ kiểu khởi tạo; scratch có `baseline_sha256=null`.
+
 Pipeline chạy riêng, không sửa GCN/RGCN/LISA/PRISM baseline. Bản triển khai dùng đúng hai lớp GCN, ReLU/dropout, linear head và mean pooling của `model/GCN2.py`. Chuẩn hóa/self-loops dùng GCNConv gốc; mỗi directed arc được nhân `epsilon + (1-epsilon)*sigmoid(q_logit)`. ROOT giữ weight=1. Có adapter cho fallback của baseline, nhưng checkpoint không chuyển qua lại giữa hai backend.
 
 ## Cài đặt
