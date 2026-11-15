@@ -263,13 +263,21 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
                             val_swap_loss=swap_loss, selection_score=score, **metrics))
         improved = score < best_score - 1e-6
         if improved:
+            raw_state = {
+                k: v.detach().cpu().clone()
+                for k, v in model.state_dict().items()
+            }
+            ema_state = {
+                k: v.detach().cpu().clone()
+                for k, v in evaluation.state_dict().items()
+            }
             best_score, best_epoch, bad = score, epoch, 0
             thresholds = np.linspace(0.05, 0.95, 91)
             accuracies = np.array([((p >= threshold) == truth).mean() for threshold in thresholds])
             threshold = float(np.median(thresholds[accuracies >= accuracies.max() - 1e-9]))
             state = {k: v.detach().cpu().clone() for k, v in evaluation.state_dict().items()}
             atomic_save(dict(
-                state=state, args=saved_args, R=train.R, gm=gm, gs=gs, thr=threshold,
+                state=ema_state,raw_state=raw_state, args=saved_args, R=train.R, gm=gm, gs=gs, thr=threshold,
                 method=f"v3_{variant}", struct_mode=args.struct_mode, best_epoch=best_epoch,
                 training_complete=False,
                 run_signature=run_signature, provenance=provenance,
