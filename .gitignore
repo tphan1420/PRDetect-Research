@@ -18,3 +18,4 @@ result/*
 .pytest_cache/
 model/V3_quang
 model/rdrop/
+output/pearl/

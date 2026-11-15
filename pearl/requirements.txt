@@ -1,0 +1,10 @@
+# Install in a suitable Python environment; do not replace legacy requirements.
+torch>=2.6
+torch-geometric>=2.5,<3
+transformers>=4.48,<5
+spacy==3.8.7
+click>=8
+numpy>=1.26
+scikit-learn>=1.3
+pytest>=8
+# Model: pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
