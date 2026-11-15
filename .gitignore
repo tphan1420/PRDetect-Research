@@ -18,4 +18,9 @@ result/*
 .pytest_cache/
 model/V3_quang
 model/rdrop/
+notebooks/kaggle/*
+!notebooks/kaggle/pearl/
+notebooks/kaggle/pearl/*
+!notebooks/kaggle/pearl/*.ipynb
+!notebooks/kaggle/pearl/README.md
 output/pearl/
