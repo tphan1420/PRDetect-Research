@@ -6,9 +6,11 @@ purpose is to catch wiring regressions, not to alter research evaluation.
 """
 
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import evaluate_v3_quang as evaluator
 import train_v3
@@ -18,6 +20,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class V3CoreCliTests(unittest.TestCase):
+    def test_determinism_defaults_on_and_can_be_disabled(self):
+        parser = train_v3.build_parser()
+        self.assertTrue(parser.parse_args([]).deterministic)
+        self.assertTrue(parser.parse_args(["--deterministic"]).deterministic)
+        self.assertFalse(parser.parse_args(["--no-deterministic"]).deterministic)
+
     def test_training_defaults_are_the_core_baseline(self):
         args = train_v3.build_parser().parse_args([])
         self.assertEqual(args.variants, ["baseline"])
@@ -62,6 +70,37 @@ class V3CoreCliTests(unittest.TestCase):
     "requires the optional torch and numpy packages",
 )
 class V3CoreNumericalTests(unittest.TestCase):
+    def test_determinism_configures_runtime_and_records_actual_settings(self):
+        import torch
+
+        before = (torch.are_deterministic_algorithms_enabled(),
+                  torch.is_deterministic_algorithms_warn_only_enabled(),
+                  torch.backends.cudnn.benchmark, torch.backends.cudnn.deterministic)
+        try:
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("CUBLAS_WORKSPACE_CONFIG", None)
+                with patch.object(torch.cuda, "is_initialized", return_value=False):
+                    state = train_v3.configure_determinism(True)
+                self.assertTrue(state["enabled"])
+                self.assertFalse(state["warn_only"])
+                self.assertEqual(state["cublas_workspace_config"], ":4096:8")
+                self.assertFalse(state["cudnn_benchmark"])
+                self.assertTrue(state["cudnn_deterministic"])
+                self.assertFalse(train_v3.configure_determinism(False)["enabled"])
+        finally:
+            torch.use_deterministic_algorithms(before[0], warn_only=before[1])
+            torch.backends.cudnn.benchmark = before[2]
+            torch.backends.cudnn.deterministic = before[3]
+
+    def test_determinism_rejects_configuration_after_cuda_initialization(self):
+        import torch
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CUBLAS_WORKSPACE_CONFIG", None)
+            with patch.object(torch.cuda, "is_initialized", return_value=True):
+                with self.assertRaisesRegex(RuntimeError, "before initializing CUDA"):
+                    train_v3.configure_determinism(True)
+
     def test_forward_backward_optimizer_and_syntax_swap(self):
         import torch
 

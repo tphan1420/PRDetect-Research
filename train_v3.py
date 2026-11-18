@@ -9,6 +9,7 @@ import gc
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import time
 
@@ -54,9 +55,37 @@ def build_parser():
     parser.add_argument("--select", choices=("lossaug", "loss", "acc", "auc"), default="lossaug")
     parser.add_argument("--amp", type=int, choices=(0, 1), default=0)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
+    parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=True,
+                        help="Use reproducible algorithms (default: on); --no-deterministic restores legacy behavior")
     parser.add_argument("--skip-completed", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser
+
+
+def configure_determinism(enabled=True):
+    """Configure this process before any CUDA work, not only the notebook parent.
+
+    Seed selection remains in set_seed(). Unsupported deterministic operations
+    raise an error instead of silently running a nondeterministic alternative.
+    """
+    import torch
+
+    if enabled:
+        workspace = os.environ.get("CUBLAS_WORKSPACE_CONFIG")
+        if workspace not in (":4096:8", ":16:8"):
+            if torch.cuda.is_initialized():
+                raise RuntimeError("Enable determinism before initializing CUDA; restart the Python process")
+            os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    torch.use_deterministic_algorithms(enabled, warn_only=False)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = enabled
+    return {
+        "enabled": torch.are_deterministic_algorithms_enabled(),
+        "warn_only": torch.is_deterministic_algorithms_warn_only_enabled(),
+        "cublas_workspace_config": os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
+        "cudnn_benchmark": torch.backends.cudnn.benchmark,
+        "cudnn_deterministic": torch.backends.cudnn.deterministic,
+    }
 
 
 def validate_args(args):
@@ -310,6 +339,7 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
 def main(argv=None):
     args = build_parser().parse_args(argv)
     validate_args(args)
+    args.determinism = configure_determinism(args.deterministic)
     import torch
 
     if args.device == "cuda" and not torch.cuda.is_available():
