@@ -20,9 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class V3CoreCliTests(unittest.TestCase):
-    def test_determinism_defaults_on_and_can_be_disabled(self):
+    def test_determinism_is_opt_in(self):
         parser = train_v3.build_parser()
-        self.assertTrue(parser.parse_args([]).deterministic)
+        self.assertFalse(parser.parse_args([]).deterministic)
         self.assertTrue(parser.parse_args(["--deterministic"]).deterministic)
         self.assertFalse(parser.parse_args(["--no-deterministic"]).deterministic)
 

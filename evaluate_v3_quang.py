@@ -129,7 +129,7 @@ def environment():
     return result
 
 
-def find_checkpoints(root, seeds, variant="quang"):
+def find_checkpoints(root, seeds, variant="quang", weights="selected"):
     root = Path(root).resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"Checkpoint directory does not exist: {root}")
@@ -141,6 +141,10 @@ def find_checkpoints(root, seeds, variant="quang"):
             raise ValueError(f"Unknown V3 variant: {variant}")
         stem = (f"p3fin_V1_swap_s{seed}_seed{seed}" if variant == "quang"
                 else f"v3_{variant}_seed{seed}")
+        if weights != "selected":
+            if variant != "baseline" or weights not in ("raw", "ema"):
+                raise ValueError("Explicit RAW/EMA names require baseline dual checkpoints")
+            stem = f"v3_baseline_{weights}_seed{seed}"
         # Kaggle preserves some uploaded PyTorch checkpoints without a file
         # extension (for example ``p3fin_V1_swap_s2021_seed2021``).  PyTorch
         # identifies checkpoints from their contents, not their suffix.
@@ -158,12 +162,13 @@ def make_config(args):
     variant = args.variant
     if variant == "quang" and args.train_domain != "hc3":
         raise ValueError("Legacy Quang checkpoints only support --train-domain hc3")
-    paths = find_checkpoints(args.checkpoint_dir, args.seeds, variant)
+    weights = getattr(args, "weights", "selected")
+    paths = find_checkpoints(args.checkpoint_dir, args.seeds, variant, weights)
     files = [MODEL_SOURCE, REPO / "building_graph.py", REPO / "dep_vocab.py",
              REPO / "dep_vocab.json"]
-    return {
+    config = {
         "model": "Quang_v3_V1_swap" if variant == "quang" else f"v3_{variant}",
-        "variant": variant, "train_domain": args.train_domain, "seeds": args.seeds,
+        "variant": variant, "train_domain": args.train_domain, "seeds": args.seeds, "weights": weights,
         "checkpoint_paths": paths,
         "checkpoint_sha256": {s: sha256(p) for s, p in paths.items()},
         "code_sha256": {str(p.relative_to(REPO)): sha256(p) for p in files if p.is_file()},
@@ -174,6 +179,19 @@ def make_config(args):
         "threshold": 0.5, "ensemble": False, "environment": environment(),
         "graph_budget_root": args.graph_budget_root,
     }
+    calibration_dir = getattr(args, "human95_dir", None)
+    if calibration_dir:
+        thresholds = {}
+        for seed, digest in config["checkpoint_sha256"].items():
+            fitted = read_json(Path(calibration_dir) / f"{digest}.json")
+            if fitted["checkpoint_sha256"] != digest or fitted["seed"] != int(seed):
+                raise ValueError("Source calibration belongs to a different checkpoint")
+            threshold = fitted["human95_threshold"]
+            if not 0 <= threshold <= 1:
+                raise ValueError("Invalid source validation probability threshold")
+            thresholds[seed] = threshold
+        config["human95_thresholds"] = thresholds
+    return config
 
 
 def _load_model(config, seed, device):
@@ -187,6 +205,9 @@ def _load_model(config, seed, device):
         if sha256(REPO / name) != expected_hash:
             raise ValueError(f"Source changed: {name}; start a new run")
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+    weights = config.get("weights", "selected")
+    if weights != "selected" and checkpoint.get("weight_source") != weights:
+        raise ValueError(f"Expected {weights} weights: {path}")
     if not {"state", "args", "R", "gm", "gs", "thr"} <= checkpoint.keys():
         raise ValueError(f"Not a Quang V3 checkpoint: {path}")
     a = checkpoint["args"]
@@ -227,6 +248,8 @@ def inspect_checkpoints(config):
             "seed": seed, "checkpoint": str(path),
             "checkpoint_sha256": config["checkpoint_sha256"][str(seed)],
             "R": int(checkpoint["R"]), "validation_threshold": float(checkpoint["thr"]),
+            "source_human95_threshold": config.get("human95_thresholds", {}).get(
+                str(seed), checkpoint.get("human95_threshold")),
             "arguments": checkpoint["args"], "struct_mode_used": config["struct_mode"],
             "parameters": sum(p.numel() for p in model.parameters()),
             "method": checkpoint.get("method", "Quang_v3_V1_swap"),
@@ -239,6 +262,19 @@ def inspect_checkpoints(config):
         gc.collect()
     return {"checkpoints": rows, "environment": config["environment"],
             "struct_mode_note": config["struct_mode_note"]}
+
+
+def human95_threshold(truth, scores):
+    """Lower empirical 5th percentile of held-out human scores (human = 1)."""
+    import numpy as np
+
+    y, scores = np.asarray(truth), np.asarray(scores)
+    if y.ndim != 1 or y.shape != scores.shape or not np.isin(y, (0, 1)).all() or not np.isfinite(scores).all():
+        raise ValueError("Expected aligned binary labels and finite validation scores")
+    human = np.sort(scores[y == 1])
+    if not len(human):
+        raise ValueError("Source validation has no human examples")
+    return float(human[(len(human) - 1) // 20])
 
 
 def score_probabilities(truth, probabilities, threshold):
@@ -310,15 +346,20 @@ def infer_checkpoint(config, seed, graph_path, expected_samples, signature):
             or not ((probabilities >= 0) & (probabilities <= 1)).all()):
         raise ValueError("Invalid predictions/labels")
     threshold = float(checkpoint["thr"])
+    coverage_threshold = config.get("human95_thresholds", {}).get(str(seed), checkpoint.get("human95_threshold"))
+    coverage_report = {} if coverage_threshold is None else {
+        "source_human95_threshold": coverage_threshold,
+        "at_source_human95": score_probabilities(truth, probabilities, coverage_threshold),
+    }
     return {
-        "model": config["model"], "train": "hc3", "seed": seed,
+        "model": config["model"], "train": config["train_domain"], "seed": seed,
         "split": Path(graph_path).stem, "checkpoint": str(path),
         "checkpoint_sha256": config["checkpoint_sha256"][str(seed)],
         "run_signature": signature, "samples": expected_samples, "threshold": 0.5,
         "batch_size": config["batch_size"], "R": relation_count,
         "struct_mode_used": config["struct_mode"], **observed,
         "label_convention": {"0": "ai", "1": "human"},
-        **score_probabilities(truth, probabilities, 0.5),
+        **score_probabilities(truth, probabilities, 0.5), **coverage_report,
         "validation_threshold": threshold,
         "at_validation_threshold": score_probabilities(truth, probabilities, threshold),
         "y_true": truth.tolist(), "p_human": probabilities.tolist(),
@@ -411,7 +452,10 @@ def evaluate_case(case, config, config_path, work_dir, max_graphs, force=False):
 
 
 def summarize(cases, results, seeds):
-    details, summaries = [], {False: [], True: []}
+    modes = {"fixed_0.5": (None, "threshold", "summary_threshold_0.5.csv"),
+             "validation": ("at_validation_threshold", "validation_threshold", "summary_validation_threshold.csv"),
+             "source_human95": ("at_source_human95", "source_human95_threshold", "summary_source_human95.csv")}
+    details, summaries = [], {mode: [] for mode in modes}
     all_reports = {}
     for case in cases:
         reports = [read_json(report_path(results, case, seed)) for seed in seeds]
@@ -419,28 +463,33 @@ def summarize(cases, results, seeds):
         for seed, report in zip(seeds, reports):
             if report["seed"] != seed or report["y_true"] != labels:
                 raise ValueError(f"Unpaired labels/seed: {case.split}")
-            for use_val in (False, True):
-                metrics = report["at_validation_threshold"] if use_val else report
+            for mode, (field, threshold_key, _) in modes.items():
+                if field and field not in report:
+                    continue
+                metrics = report[field] if field else report
                 details.append({
                     "suite": case.suite, "condition": case.condition,
                     "noise_percent": case.noise_percent, "seed": seed,
-                    "threshold_mode": "validation" if use_val else "fixed_0.5",
-                    "threshold": report["validation_threshold"] if use_val else 0.5,
+                    "threshold_mode": mode, "threshold": report[threshold_key],
                     **{metric: metrics[metric] for metric in METRICS},
                     "clipped_edges": report["clipped_edges"],
                 })
         all_reports[case.suite, case.split] = reports
-        for use_val in (False, True):
+        for mode, (field, _, _) in modes.items():
+            if field and not all(field in r for r in reports):
+                continue
             row = {"suite": case.suite, "condition": case.condition,
                    "noise_percent": case.noise_percent, "num_seeds": len(seeds)}
             for metric in METRICS:
-                values = [(r["at_validation_threshold"] if use_val else r)[metric] for r in reports]
+                values = [(r[field] if field else r)[metric] for r in reports]
                 row[f"{metric}_mean"] = statistics.mean(values)
                 row[f"{metric}_std"] = statistics.stdev(values) if len(values) > 1 else None
-            summaries[use_val].append(row)
+            summaries[mode].append(row)
     noise_cases = [c for c in cases if c.suite == "table4" and c.noise_percent == 25]
     if len(noise_cases) == 4:
-        for use_val in (False, True):
+        for mode, (field, _, _) in modes.items():
+            if field and not all(field in r for c in noise_cases for r in all_reports[c.suite, c.split]):
+                continue
             row = {"suite": "table4", "condition": "Average (4 noise sets)",
                    "noise_percent": 25, "num_seeds": len(seeds)}
             for metric in METRICS:
@@ -449,27 +498,28 @@ def summarize(cases, results, seeds):
                     per_seed = []
                     for case in noise_cases:
                         report = all_reports[case.suite, case.split][i]
-                        per_seed.append((report["at_validation_threshold"] if use_val else report)[metric])
+                        per_seed.append((report[field] if field else report)[metric])
                     values.append(statistics.mean(per_seed))
                 row[f"{metric}_mean"] = statistics.mean(values)
                 row[f"{metric}_std"] = statistics.stdev(values) if len(values) > 1 else None
-            summaries[use_val].append(row)
-    for name, rows in (("per_seed.csv", details),
-                       ("summary_threshold_0.5.csv", summaries[False]),
-                       ("summary_validation_threshold.csv", summaries[True])):
+            summaries[mode].append(row)
+    tables = {"per_seed.csv": details, **{modes[mode][2]: rows for mode, rows in summaries.items() if rows}}
+    for name, rows in tables.items():
         with (results / name).open("w", newline="", encoding="utf-8") as stream:
             writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
             writer.writeheader()
             writer.writerows(rows)
-    for row in summaries[False]:
+    for row in summaries["fixed_0.5"]:
         spread = f" +/- {100 * row['accuracy_std']:.2f}" if row["accuracy_std"] is not None else ""
         print(f"{row['suite']:6s} | {row['condition']:25s} | "
               f"Acc@0.5 {100 * row['accuracy_mean']:.2f}{spread}%", flush=True)
+    return list(tables)
 
 
-def export_archive(results, archive, cases, seeds, extra_cases=()):
+def export_archive(results, archive, cases, seeds, extra_cases=(), summary_files=()):
     """Do not export stale reports from a previous seed/suite in the same folder."""
     paths = {report_path(results, case, seed) for case in [*cases, *extra_cases] for seed in seeds}
+    paths.update(results / name for name in summary_files)
     paths.update(results / name for name in (
         "per_seed.csv", "summary_threshold_0.5.csv", "summary_validation_threshold.csv",
         "checkpoint_metadata.json", "manifest.json",
@@ -521,7 +571,7 @@ def run_benchmarks(args):
         execution = [c for c in cases if c != clean]
     for case in execution:
         evaluate_case(case, config, config_path, work, args.max_graphs, args.force)
-    summarize(cases, results, args.seeds)
+    summary_files = summarize(cases, results, args.seeds)
     manifest = {**config, "suite": args.suite, "cases": [asdict(c) for c in cases],
                 "sanity_cases": [asdict(c) for c in extra_cases],
                 "clean_check_skipped": args.skip_clean_check,
@@ -530,7 +580,7 @@ def run_benchmarks(args):
     name = ("v3_quang_table3_table4_results.zip" if args.variant == "quang" and args.suite == "all"
             else f"v3_{args.variant}_{args.suite}_results.zip")
     archive = work / name
-    export_archive(results, archive, cases, args.seeds, extra_cases)
+    export_archive(results, archive, cases, args.seeds, extra_cases, summary_files)
     print(f"Results: {results}\nArchive: {archive}", flush=True)
 
 
@@ -550,10 +600,13 @@ def build_parser():
         p.add_argument("--train-domain", choices=tuple(TRAINING_DOMAINS), default="hc3",
                        help="Training domain; determines in-domain Table 2 and Table 3 direction")
         p.add_argument("--checkpoint-dir", default=str(REPO / "model/V3_quang"))
+        p.add_argument("--weights", choices=("selected", "raw", "ema"), default="selected")
         p.add_argument("--seeds", type=int, nargs="+", default=DEFAULT_SEEDS)
         p.add_argument("--batch-size", type=positive_int, default=4)
         p.add_argument("--struct-mode", choices=("low", "high"), default="low")
         p.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
+        p.add_argument("--human95-dir", type=Path,
+                       help="Source validation calibration files keyed by checkpoint SHA256 for older weights")
         p.add_argument("--graph-budget-root", help="Also count caches recursively under this workflow root")
         if command == "inspect":
             p.add_argument("--config")

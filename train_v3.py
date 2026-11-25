@@ -13,8 +13,8 @@ import os
 from pathlib import Path
 import time
 
-from evaluate_v3_quang import (REPO, TRAINING_DOMAINS, environment, positive_int,
-                               sha256, write_json)
+from evaluate_v3_quang import (REPO, TRAINING_DOMAINS, environment, human95_threshold,
+                               positive_int, sha256, write_json)
 
 
 def build_parser():
@@ -55,8 +55,8 @@ def build_parser():
     parser.add_argument("--select", choices=("lossaug", "loss", "acc", "auc"), default="lossaug")
     parser.add_argument("--amp", type=int, choices=(0, 1), default=0)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
-    parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=True,
-                        help="Use reproducible algorithms (default: on); --no-deterministic restores legacy behavior")
+    parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=False,
+                        help="Require deterministic algorithms (default: off). Seeds still control the sampler and initialization.")
     parser.add_argument("--skip-completed", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser
@@ -307,6 +307,7 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
             state = {k: v.detach().cpu().clone() for k, v in evaluation.state_dict().items()}
             atomic_save(dict(
                 state=ema_state,raw_state=raw_state, args=saved_args, R=train.R, gm=gm, gs=gs, thr=threshold,
+                human95_threshold=human95_threshold(truth, p),
                 method=f"v3_{variant}", struct_mode=args.struct_mode, best_epoch=best_epoch,
                 training_complete=False,
                 run_signature=run_signature, provenance=provenance,
