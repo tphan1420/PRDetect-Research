@@ -194,6 +194,34 @@ python detect.py --text "There are many factors that contribute to the intellige
 
 ---
 
+## PRDetect V4
+
+V4 is the HC3 detector evaluated as **V3 EMA × A1**. Each seed has its own
+V3 EMA checkpoint and aligned A1 R-GCN. The human score is
+`p_human_ema * sigmoid(a1_logit_human)`. A score of 0.5 or more predicts human.
+Existing `v3_baseline_ema_seed{seed}.pt` and `a1_seed{seed}.pt` files can be
+used directly from the extracted five-seed checkpoint dataset.
+
+```bash
+python detect.py --model_type v4 --seed 2026 --v4-checkpoint-dir result/Result_v3/v3_ema_a1_checkpoints --text "This is an example."
+python v4.py evaluate --checkpoint-dir result/Result_v3/v3_ema_a1_checkpoints --suite full --device cuda --output-dir output/v4/tables
+python train_v4.py --seed 2026 --output-dir output/v4/checkpoints --feature-cache output/v4/cache --batch-size 1 --micro-batch-size 1
+```
+
+The Kaggle [05 evaluation notebook](notebooks/kaggle/v4/05_v4_hc3_tables_2_3_4.ipynb)
+scores all five seeds on one split before releasing its temporary graph. It
+stores separate EMA and A1 reports alongside the V4 report for each seed.
+The [07 training notebook](notebooks/kaggle/v4/07_train_v4_hc3.ipynb) trains both
+branches, exports the EMA/A1 pair and scores the three reference splits. Install
+`requirements-v3-eval.txt`, `torch-geometric` and the spaCy `en_core_web_sm`
+pipeline for local runs. Both notebooks support attaching the V4 source files
+as a Kaggle Dataset alongside the repository checkout.
+
+For ablations, the dual trainer also saves the RAW checkpoint. Use
+`evaluate_v3_quang.py` for V3-only runs and `v3_a1_fusion.py` for the
+historical A1, fusion, routed and human95 experiments. The previous Kaggle
+experiments remain under `notebooks/kaggle/v3_base/`.
+
 ## V3 Core baseline
 
 The standalone V3 Core is Quang's basis-decomposed RGCN baseline with the

@@ -47,17 +47,18 @@ OUTPUT_DIM = 64
 
 def _parse_args():
     parser = argparse.ArgumentParser(
-        description="Dự đoán văn bản Human hay Machine bằng PRDetect (GCN / RGCN)"
+        description="Dự đoán văn bản Human hay Machine bằng PRDetect (GCN / RGCN / V4)"
     )
     parser.add_argument("--text", required=True, help="Đoạn văn bản cần kiểm tra")
     parser.add_argument("--dataset", default="hc3")
     parser.add_argument("--seed", default="2024")
     parser.add_argument(
         "--model_type",
-        choices=("rgcn", "gcn"),
+        choices=("rgcn", "gcn", "v4"),
         default="rgcn",
-        help="Kiểu mô hình suy luận: rgcn hoặc gcn",
+        help="Kiểu mô hình suy luận",
     )
+    parser.add_argument("--v4-checkpoint-dir", type=Path, help="Thư mục chứa cặp EMA và A1 cùng seed")
     return parser.parse_args()
 
 
@@ -128,9 +129,17 @@ def _build_input_data(text, model_type, device):
     return Data(**data_kwargs)
 
 
-def detect(text, dataset="hc3", seed="2024", model_type="rgcn"):
+def detect(text, dataset="hc3", seed="2024", model_type="rgcn", v4_checkpoint_dir=None):
+    if model_type == "v4":
+        from v4 import CheckpointPair, predict
+        if dataset != "hc3":
+            raise ValueError("V4 dùng checkpoint train trên HC3.")
+        folder = v4_checkpoint_dir or ROOT_DIR / "result/Result_v3/v3_ema_a1_checkpoints"
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        result = predict(CheckpointPair.load(folder, int(seed), device, 1), text)
+        return result["p_human"], int(result["label"] == "human")
     if model_type not in {"gcn", "rgcn"}:
-        raise ValueError("model_type phải là 'gcn' hoặc 'rgcn'.")
+        raise ValueError("model_type phải là 'gcn', 'rgcn' hoặc 'v4'.")
 
     seed_int = int(seed)
     torch.manual_seed(seed_int)
@@ -157,6 +166,7 @@ def main():
         dataset=args.dataset,
         seed=args.seed,
         model_type=args.model_type,
+        v4_checkpoint_dir=args.v4_checkpoint_dir,
     )
     label_name = (
         "Human-written (Người viết)"

@@ -64,7 +64,7 @@ def paired_scores(source, labels, v3, a1):
 class AlignedScorer:
     """The original A1 aligned RoBERTa and V1 dependency graph, streamed by text."""
 
-    def __init__(self, checkpoint, device):
+    def __init__(self, checkpoint, device, revision=None):
         import spacy
         import torch
         from transformers import AutoModel, AutoTokenizer
@@ -73,27 +73,34 @@ class AlignedScorer:
         self.device = torch.device(device)
         self.nlp = spacy.load("en_core_web_sm", disable=["ner"])
         self.vocab = get_default_vocab()
-        self.tokenizer = AutoTokenizer.from_pretrained("roberta-base", use_fast=True, add_prefix_space=True)
-        self.encoder = AutoModel.from_pretrained("roberta-base", add_pooling_layer=False).to(device).eval()
-        if checkpoint is None:
-            return
+        self.tokenizer = AutoTokenizer.from_pretrained("roberta-base", use_fast=True, add_prefix_space=True,
+                                                       revision=revision)
+        self.encoder = AutoModel.from_pretrained("roberta-base", add_pooling_layer=False,
+                                                 revision=revision).to(device).eval()
+        if checkpoint is not None:
+            self.graph = self.load_a1(checkpoint, device)
+
+    @staticmethod
+    def load_a1(checkpoint, device):
+        import torch
         from model.RGCN import RGCN2
         state = torch.load(checkpoint, weights_only=True, map_location="cpu")
         relations, bases = state["conv1.comp"].shape
-        self.graph = RGCN2(input_dim=state["conv1.root"].shape[0], hidden_dim=state["conv1.root"].shape[1],
+        graph = RGCN2(input_dim=state["conv1.root"].shape[0], hidden_dim=state["conv1.root"].shape[1],
                            output_dim=state["fc.weight"].shape[1], num_relations=relations, num_bases=bases)
-        self.graph.load_state_dict(state, strict=True)
-        self.graph.to(device).eval()
+        graph.load_state_dict(state, strict=True)
+        graph.to(device).eval()
         # At inference the same basis weights are expanded for every document.
         # Materialize them once with the identical PyG basis product.
         with torch.no_grad():
-            for layer in (self.graph.conv1, self.graph.conv2):
+            for layer in (graph.conv1, graph.conv2):
                 basis = layer.weight
                 dense = (layer.comp @ basis.flatten(1)).view(relations, *basis.shape[1:])
                 layer.weight = torch.nn.Parameter(dense, requires_grad=False)
                 layer.num_bases = None
+        return graph
 
-    def score_doc(self, doc):
+    def aligned_graph(self, doc):
         import torch
         if not len(doc):
             raise ValueError("Cannot classify an empty document")
@@ -118,11 +125,21 @@ class AlignedScorer:
             x = sums / counts.clamp_min(1).unsqueeze(1)
             edges = torch.tensor([[w.i for w in doc], [w.head.i for w in doc]], device=self.device)
             rel = torch.tensor([self.vocab.encode(w.dep_) for w in doc], device=self.device)
-            h = self.graph.conv1(x, edges, rel).relu()
-            h = self.graph.conv2(h, edges, rel).relu()
-            return self.graph.fc(h).mean().item()
+            return x, edges, rel
 
-    def v3_probability(self, doc, model):
+    @staticmethod
+    def a1_logit(graph, inputs):
+        import torch
+        x, edges, rel = inputs
+        with torch.inference_mode():
+            h = graph.conv1(x, edges, rel).relu()
+            h = graph.conv2(h, edges, rel).relu()
+            return graph.fc(h).mean().item()
+
+    def score_doc(self, doc):
+        return self.a1_logit(self.graph, self.aligned_graph(doc))
+
+    def v3_probability(self, doc, model, amp=False):
         """Use the V3 checkpoint's original word IDs, edge schema and FP16 cache rounding."""
         import torch
         from model.QuangV3 import struct_features
@@ -143,7 +160,8 @@ class AlignedScorer:
                      "dst": torch.as_tensor(dst, device=self.device), "rel": torch.as_tensor(rel, device=self.device),
                      "st": torch.as_tensor(structure, dtype=torch.long, device=self.device),
                      "B": 1, "bidx": torch.zeros(len(words), dtype=torch.long, device=self.device)}
-            return model(batch).sigmoid().item()
+            with torch.autocast("cuda", enabled=amp and self.device.type == "cuda"):
+                return model(batch).float().sigmoid().item()
 
 
 def main():

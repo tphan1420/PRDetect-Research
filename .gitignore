@@ -23,4 +23,5 @@ notebooks/kaggle/*
 notebooks/kaggle/pearl/*
 !notebooks/kaggle/pearl/*.ipynb
 !notebooks/kaggle/pearl/README.md
+!notebooks/kaggle/v4/
 output/pearl/
