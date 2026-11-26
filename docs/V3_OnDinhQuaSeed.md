@@ -95,3 +95,26 @@ python benchmark_v3_stability.py --output result/Result_v3/source_calibration/pa
 Phương án hai nhánh dùng `python v3_a1_fusion.py predict --rule fusion --v3-checkpoint $run --text '...'`. Để tính điểm A1 cho cả split, lệnh `score-a1` nhận các đường dẫn JSONL qua `--sources` và lưu vào thư mục do `--output-dir` chỉ định.
 
 Các số liệu theo từng seed, confusion matrix, recall, AUC, ngưỡng và SHA nằm trong [kết quả ghép cặp](../result/Result_v3/source_calibration/paired_results.json).
+
+## Chọn A1 hoặc V3 RAW theo từng văn bản
+
+Notebook 07 báo cấu hình này ở cột `A1/V3 routed`. Bộ chọn nhánh dùng tần suất từ và mức phù hợp giữa các từ lân cận. Một phần HC3 train cung cấp thống kê tham chiếu. Phần còn lại cung cấp cặp văn bản nguyên gốc và bản thay ngẫu nhiên 10–35% số từ để huấn luyện bộ phân loại logistic. Ngưỡng là phân vị 95% điểm nhiễu trên HC3 validation sạch sau khi loại dòng trùng train. Trên 984 dòng dùng để hiệu chỉnh, 4,98% dòng sạch và 71,24% bản thay từ nhân tạo vượt ngưỡng. Văn bản vượt ngưỡng dùng V3 RAW với ngưỡng human95 riêng của checkpoint. Các văn bản còn lại dùng A1 ở ngưỡng 0,5.
+
+Bốn seed 2020, 2022, 2024, 2025 dùng cùng notebook Dual+A1. Mỗi cột bên dưới dùng đúng cùng 1.000 văn bản cho mọi checkpoint và đối chứng. Số sau dấu ± là độ lệch chuẩn mẫu giữa các seed. Mốc GCN là checkpoint tác giả train lại tại ngưỡng 0,5.
+
+| Accuracy | HC3 sạch | HC3 → GPT‑3.5 sạch | HC3 Replace 25% |
+|---|---:|---:|---:|
+| GCN train lại | 98,55% | 69,45% | 72,83% |
+| RAW × A1, ngưỡng 0,5 | 98,20% | 85,75% | 86,50% |
+| A1/V3 routed | 98,80% ± 0,41 | 88,23% ± 0,75 | 80,08% ± 1,11 |
+| Chênh với GCN (điểm phần trăm) | +0,25 | +18,78 | +7,25 |
+| Khoảng bootstrap 95% của chênh lệch theo văn bản | [−0,38; +0,88] | [+16,43; +21,13] | [+4,55; +9,90] |
+
+Trên HC3 sạch, seed 2020 đạt 98,20% so với 98,60% của GCN, seed 2025 hòa ở 98,90%, hai seed còn lại vượt GCN. Cả bốn seed đều vượt GCN trên hai tập kia. Khi bổ sung seed 2026 từ lần train V3 RAW và A1 trước Dual, trung bình năm seed đạt 98,88%, 87,82% và 80,24%. Các lỗi và kết quả của bộ benchmark này đã được tham khảo khi xây dựng hướng nghiên cứu. Khoảng bootstrap lấy mẫu lại cùng văn bản trong từng lớp ở tất cả các seed và giữ cố định các checkpoint.
+
+Để chấm lại các ZIP đã tải về trên Windows, chạy lệnh dưới đây ở thư mục project. Chương trình khớp checkpoint, nhãn và thứ tự mẫu, lưu bộ chọn nhánh cùng dự đoán từng văn bản. [Kết quả chi tiết](../result/Result_v3/v3_a1_routing/paired_results.json)
+
+```powershell
+$dualArchives = 2020, 2022, 2024, 2025 | ForEach-Object { "D:/Downloads/v3_dual_a1_hc3_seed$_.zip" }
+python evaluate_v3_a1_routing.py @dualArchives D:/Downloads/v3_a1_hc3_seed2026.zip
+```

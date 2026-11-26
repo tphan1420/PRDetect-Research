@@ -157,7 +157,8 @@ def main():
     predict = commands.add_parser("predict", help="Classify a new English document with a single V3 seed and A1")
     predict.add_argument("--text", required=True)
     predict.add_argument("--v3-checkpoint", required=True, type=Path)
-    predict.add_argument("--rule", choices=("fusion", "human95"), default="fusion")
+    predict.add_argument("--rule", choices=("fusion", "human95", "routed"), default="fusion")
+    predict.add_argument("--router", type=Path, help="Fitted hc3_router.joblib for the routed rule")
     predict.add_argument("--human95-dir", type=Path, help="Source thresholds for checkpoints created before human95")
     predict.add_argument("--checkpoint", type=Path, default=REPO / "model/hc3_a1_only_rgcn_model_2026.pth")
     predict.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
@@ -174,12 +175,26 @@ def main():
                                  **score_probabilities(labels, p, 0.5), "human_score": p.tolist()})
         return
     if args.command == "predict":
+        if args.rule == "routed":
+            import joblib
+            from v3_a1_routing import use_v3
+            if args.router is None:
+                parser.error("--rule routed requires --router")
+            if not use_v3(joblib.load(args.router), [args.text])[0]:
+                scorer = AlignedScorer(args.checkpoint, args.device)
+                logit = scorer.score_doc(scorer.nlp(args.text))
+                print(json.dumps({"rule": "routed", "branch": "a1", "human_score": float(expit(logit)),
+                                  "threshold": 0.5, "a1_checkpoint_sha256": sha256(args.checkpoint),
+                                  "label": "human" if logit >= 0 else "ai"}))
+                return
         from calibrate_v3 import load_v3_checkpoint
         model, ckpt, key = load_v3_checkpoint(args.v3_checkpoint)
+        if args.rule == "routed" and ckpt.get("weight_source") == "ema":
+            raise ValueError("The routed method uses the V3 RAW checkpoint")
         scorer = AlignedScorer(args.checkpoint if args.rule == "fusion" else None, args.device)
         doc = scorer.nlp(args.text)
         v3 = scorer.v3_probability(doc, model.to(scorer.device))
-        if args.rule == "human95":
+        if args.rule in ("human95", "routed"):
             threshold = ckpt.get("human95_threshold")
             if args.human95_dir:
                 fitted = json.loads((args.human95_dir / f"{key}.json").read_bytes())
@@ -189,6 +204,8 @@ def main():
             if threshold is None or not 0 <= threshold <= 1:
                 raise ValueError("Fit and supply --human95-dir for this checkpoint")
             result = {"human_score": v3, "threshold": threshold}
+            if args.rule == "routed":
+                result["branch"] = "v3_raw"
         else:
             a1 = scorer.score_doc(doc)
             result = {"human_score": float(human_score(v3, a1)), "threshold": 0.5, "a1_p_human": float(expit(a1))}
