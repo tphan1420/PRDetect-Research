@@ -1,6 +1,9 @@
 # Reuse the Kaggle GPU PyTorch installation; do not replace it with old wheels.
 numpy>=1.26
-transformers==4.44.2
+transformers==4.44.2; python_version < "3.13"
+# Python 3.13 needs a tokenizers build with a compatible wheel.
+transformers==4.51.3; python_version >= "3.13"
+tokenizers==0.21.4; python_version >= "3.13"
 spacy>=3.8,<3.9
 scikit-learn>=1.4
 tqdm
