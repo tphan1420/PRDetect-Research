@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
 from importlib.metadata import version
@@ -24,7 +25,7 @@ from train_v3 import atomic_save
 from v3_a1_fusion import AlignedScorer, labels_from, read_source, source_digest
 
 
-def prepare_graphs(cache, sources, revision, device="cuda"):
+def prepare_graphs(cache, sources, revision, device="cuda", *, prepare_a1=True):
     local_encoder = REPO / "roberta-base"
     versions = {k: version(k) for k in ("torch", "transformers", "spacy", "en-core-web-sm",
                                          "tokenizers", "torch-geometric")}
@@ -46,6 +47,8 @@ def prepare_graphs(cache, sources, revision, device="cuda"):
             for s in missing:
                 name = f"{s.stem}.pkl"
                 (Path(tmp) / "graph_data" / name).replace(dest / name)
+    if not prepare_a1:
+        return dest
     # Instantiate the frozen encoder even on cache hits to preserve notebook 07's RNG sequence.
     scorer = AlignedScorer(None, device, revision=revision)
     for s in sources:
@@ -112,12 +115,18 @@ def main():
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--feature-cache", type=Path, required=True)
     parser.add_argument("--v3-epochs", type=int, default=10)
+    parser.add_argument("--v3-struct", type=int, choices=(0, 1), default=1,
+                        help="Enable V3 node structural features.")
+    parser.add_argument("--v3-aug", choices=("swap", "none"), default="swap",
+                        help="V3 training augmentation. Checkpoint selection uses the same validation proxy.")
     parser.add_argument("--a1-epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--micro-batch-size", type=int, default=1)
     parser.add_argument("--val-batch-size", type=int, default=64)
     parser.add_argument("--a1-batch", type=int, default=4)
     parser.add_argument("--a1-lr", type=float, default=0.0001)
+    parser.add_argument("--a1-checkpoint", type=Path,
+                        help="Reuse the reference V4 A1 checkpoint for this seed instead of training A1.")
     parser.add_argument("--serial", action="store_true", help="Use one GPU even when two are available")
     args = parser.parse_args()
     if not torch.cuda.is_available():
@@ -125,6 +134,11 @@ def main():
     if min(args.v3_epochs, args.a1_epochs, args.batch_size, args.micro_batch_size,
            args.val_batch_size, args.a1_batch, args.a1_lr) <= 0 or args.micro_batch_size > args.batch_size:
         parser.error("Check the epoch counts, learning rate and batch sizes")
+    if args.a1_checkpoint is not None:
+        args.a1_checkpoint = args.a1_checkpoint.resolve()
+        if not args.a1_checkpoint.is_file() or args.a1_checkpoint.name != f"a1_seed{args.seed}.pt":
+            parser.error(f"Expected an existing A1 checkpoint named a1_seed{args.seed}.pt")
+        AlignedScorer.load_a1(args.a1_checkpoint, "cpu")
     dest = args.output_dir.resolve() / f"seed{args.seed}"
     if dest.exists():
         parser.error(f"Completed output already exists: {dest}. Use a fresh output directory for a new run.")
@@ -137,16 +151,21 @@ def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
-    graphs = prepare_graphs(args.feature_cache.resolve(), sources, revision)
+    graphs = prepare_graphs(args.feature_cache.resolve(), sources, revision,
+                            prepare_a1=args.a1_checkpoint is None)
     torch.cuda.empty_cache()
     with TemporaryDirectory(dir=dest.parent) as tmp:
         out = Path(tmp) / "models"
         out.mkdir()
         cmd = [sys.executable, str(REPO / "train_v3_dual_best.py"), "--seeds", str(args.seed),
                "--device", "cuda", "--no-deterministic", "--ema", "1", "--epochs", str(args.v3_epochs),
+               "--struct", str(args.v3_struct), "--aug", args.v3_aug,
                "--batch-size", str(args.batch_size), "--micro-batch-size", str(args.micro_batch_size),
                "--val-batch-size", str(args.val_batch_size), "--graph-dir", str(graphs), "--output-dir", str(out)]
-        if not args.serial and torch.cuda.device_count() >= 2:
+        if args.a1_checkpoint is not None:
+            shutil.copyfile(args.a1_checkpoint, out / args.a1_checkpoint.name)
+            subprocess.run(cmd, cwd=REPO, check=True)
+        elif not args.serial and torch.cuda.device_count() >= 2:
             second = os.environ.get("CUDA_VISIBLE_DEVICES", "0,1").split(",")[1].strip()
             with subprocess.Popen(cmd, cwd=REPO, env={**os.environ, "CUDA_VISIBLE_DEVICES": second}) as proc:
                 try:
@@ -163,11 +182,16 @@ def main():
         record = json.loads((out / f"v3_baseline_dual_seed{args.seed}.train.json").read_bytes())
         if not record["complete"] or record["checkpoint_sha256"]["ema"] != sha256(paths[0]):
             raise ValueError("Incomplete EMA training record")
+        config = record["provenance"]["config"]
+        if (config["struct"], config["aug"], config["ema"]) != (args.v3_struct, args.v3_aug, 1):
+            raise ValueError("Unexpected structural features, augmentation or EMA configuration")
         manifest = out / "manifest.json"
         write_json(manifest, [dict(seed=args.seed, file=p.name, sha256=sha256(p)) for p in paths])
-        write_json(out / "v4_train.json", dict(model="v4", threshold=0.5, encoder_revision=revision,
+        model_name = {(1, "swap"): "v4", (0, "swap"): "v4_abla2",
+                      (1, "none"): "v4_abla3", (0, "none"): "v4_abla1"}[args.v3_struct, args.v3_aug]
+        write_json(out / "v4_train.json", dict(model=model_name, threshold=0.5, encoder_revision=revision,
                    args={k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}))
-        with ZipFile(out / f"v4_hc3_seed{args.seed}.zip", "w", ZIP_DEFLATED) as z:
+        with ZipFile(out / f"{model_name}_hc3_seed{args.seed}.zip", "w", ZIP_DEFLATED) as z:
             for p in [*paths, manifest]:
                 z.write(p, p.name)
         out.rename(dest)
