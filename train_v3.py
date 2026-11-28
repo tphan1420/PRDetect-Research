@@ -39,6 +39,8 @@ def build_parser():
     parser.add_argument("--readout", choices=("pool3",), default="pool3")
     parser.add_argument("--aug", choices=("none", "swap", "mask", "both"), default="swap")
     parser.add_argument("--aug-max", type=float, default=0.35)
+    parser.add_argument("--relation-response", action="store_true",
+                        help="Classify pooled graph features and their response to relation shuffling")
     parser.add_argument("--ema", type=int, choices=(0, 1), default=1)
     parser.add_argument("--ema-decay", type=float, default=0.998)
     parser.add_argument("--lr", type=float, default=5e-4)
@@ -89,6 +91,8 @@ def configure_determinism(enabled=True):
 
 
 def validate_args(args):
+    if getattr(args, "relation_response", False) and (args.struct or args.gfeat or args.aug != "none"):
+        raise ValueError("Relation response requires --struct 0 --gfeat 0 --aug none")
     pairs = {(item["train_file"], item["val_file"]) for item in TRAINING_DOMAINS.values()}
     if (args.train_file, args.val_file) not in pairs:
         raise ValueError("Use a supported train/validation pair from TRAINING_DOMAINS")
@@ -112,6 +116,8 @@ def effective_readout(args, variant):
 
 def build_model(args, variant, R):
     from model.QuangV3 import Net
+    if getattr(args, "relation_response", False):
+        from model.RelationResponse import RelationResponseNet as Net
 
     kwargs = dict(d=args.hidden, nb=args.num_bases, L=args.layers, p=args.dropout,
                   p_in=args.in_dropout, edge_drop=args.edge_drop,
@@ -188,7 +194,8 @@ def signature(args, variant, seed, data_hashes):
         config.pop(key)
     config["effective_readout"] = effective_readout(args, variant)
     code = {str(p.relative_to(REPO)): sha256(p) for p in (
-        Path(__file__), REPO / "model/QuangV3.py", REPO / "building_graph.py", REPO / "dep_vocab.py",
+        Path(__file__), REPO / "model/QuangV3.py", REPO / "model/RelationResponse.py",
+        REPO / "building_graph.py", REPO / "dep_vocab.py",
         REPO / "dep_vocab.json",
     )}
     record = dict(config=config, variant=variant, seed=seed, data=data_hashes,

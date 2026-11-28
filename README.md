@@ -197,7 +197,12 @@ python detect.py --text "There are many factors that contribute to the intellige
 ## PRDetect V4
 
 V4 is the HC3 detector evaluated as **V3 EMA × A1**. Each seed has its own
-V3 EMA checkpoint and aligned A1 R-GCN. The human score is
+V3 EMA checkpoint and aligned A1 R-GCN. V4 training defaults to the Abla1 recipe
+with V3 node structural features and training-time swap disabled.
+Use `--v3-struct 1` to enable structural features and `--v3-aug swap` to enable
+training-time swap. Set both flags to reproduce the original V4 training
+configuration. All configurations keep the same checkpoint selection criterion,
+which combines clean validation loss and validation loss with swap. The human score is
 `p_human_ema * sigmoid(a1_logit_human)`. A score of 0.5 or more predicts human.
 Existing `v3_baseline_ema_seed{seed}.pt` and `a1_seed{seed}.pt` files can be
 used directly from the extracted five-seed checkpoint dataset.
@@ -211,16 +216,27 @@ python train_v4.py --seed 2026 --output-dir output/v4/checkpoints --feature-cach
 The Kaggle [05 evaluation notebook](notebooks/kaggle/v4/05_v4_hc3_tables_2_3_4.ipynb)
 scores all five seeds on one split before releasing its temporary graph. It
 stores separate EMA and A1 reports alongside the V4 report for each seed.
-The [07 training notebook](notebooks/kaggle/v4/07_train_v4_hc3.ipynb) trains both
-branches, exports the EMA/A1 pair and scores the three reference splits. Install
+The [07 training notebook](notebooks/kaggle/v4/07_train_v4_hc3.ipynb) fetches the
+`version4` branch, trains both branches, exports the EMA/A1 pair and scores the
+three reference splits. It exposes `V3_STRUCT` and `V3_AUG` in its settings cell.
+Install
 `requirements-v3-eval.txt`, `torch-geometric` and the spaCy `en_core_web_sm`
-pipeline for local runs. Both notebooks support attaching the V4 source files
-as a Kaggle Dataset alongside the repository checkout.
+pipeline for local runs. The 05 evaluation notebook supports attaching the V4
+source files as a Kaggle Dataset alongside the repository checkout.
 
 For ablations, the dual trainer also saves the RAW checkpoint. Use
 `evaluate_v3_quang.py` for V3-only runs and `v3_a1_fusion.py` for the
 historical A1, fusion, routed and human95 experiments. The previous Kaggle
 experiments remain under `notebooks/kaggle/v3_base/`.
+
+The experimental [07 relation response notebook](notebooks/kaggle/v4/07_train_v4_relation_response_hc3.ipynb)
+uses `--relation-response --v3-struct 0 --v3-aug none` and a supplied same-seed
+`--a1-checkpoint`. A shared R-GCN encodes the original graph and one permutation
+of its non-self-loop relation labels. Its head receives the original pooled
+features and their difference from the control graph. Training shares dropout
+masks between the two views. Evaluation fixes the permutation per graph.
+The notebook exports separate EMA and EMA × A1 scores, training provenance and
+the code commit for the three reference splits.
 
 ## V3 Core baseline
 

@@ -164,7 +164,7 @@ def make_config(args):
         raise ValueError("Legacy Quang checkpoints only support --train-domain hc3")
     weights = getattr(args, "weights", "selected")
     paths = find_checkpoints(args.checkpoint_dir, args.seeds, variant, weights)
-    files = [MODEL_SOURCE, REPO / "building_graph.py", REPO / "dep_vocab.py",
+    files = [MODEL_SOURCE, REPO / "model/RelationResponse.py", REPO / "building_graph.py", REPO / "dep_vocab.py",
              REPO / "dep_vocab.json"]
     config = {
         "model": "Quang_v3_V1_swap" if variant == "quang" else f"v3_{variant}",
@@ -211,6 +211,8 @@ def _load_model(config, seed, device):
     if not {"state", "args", "R", "gm", "gs", "thr"} <= checkpoint.keys():
         raise ValueError(f"Not a Quang V3 checkpoint: {path}")
     a = checkpoint["args"]
+    if a.get("relation_response", False):
+        from model.RelationResponse import RelationResponseNet as Net
     expected_train = TRAINING_DOMAINS[config["train_domain"]]["train_file"]
     if a["train_file"] != expected_train or a["seeds"] != [seed]:
         raise ValueError(f"Checkpoint training dataset/seed mismatch: {path}")
@@ -357,6 +359,7 @@ def infer_checkpoint(config, seed, graph_path, expected_samples, signature):
         "checkpoint_sha256": config["checkpoint_sha256"][str(seed)],
         "run_signature": signature, "samples": expected_samples, "threshold": 0.5,
         "batch_size": config["batch_size"], "R": relation_count,
+        "relation_response": bool(checkpoint["args"].get("relation_response", False)),
         "struct_mode_used": config["struct_mode"], **observed,
         "label_convention": {"0": "ai", "1": "human"},
         **score_probabilities(truth, probabilities, 0.5), **coverage_report,
@@ -529,7 +532,7 @@ def export_archive(results, archive, cases, seeds, extra_cases=(), summary_files
             output.write(path, str(Path("result") / path.relative_to(results)))
         output.write(Path(__file__), "evaluate_v3_quang.py")
         output.write(MODEL_SOURCE, "model/QuangV3.py")
-        for relative in ("train_v3.py",):
+        for relative in ("train_v3.py", "model/RelationResponse.py"):
             source = REPO / relative
             if source.is_file():
                 output.write(source, relative)
