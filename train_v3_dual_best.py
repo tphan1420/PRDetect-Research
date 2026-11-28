@@ -9,7 +9,7 @@ import time
 
 from evaluate_v3_quang import REPO, TRAINING_DOMAINS, environment, sha256, write_json
 from train_v3 import (atomic_save, build_model, build_parser, configure_determinism,
-                      effective_readout, load_graph, validate_args, validation_loss)
+                      effective_readout, load_graph, training_forward, validate_args, validation_loss)
 
 
 def signature(args, variant, seed, data_hashes):
@@ -18,7 +18,8 @@ def signature(args, variant, seed, data_hashes):
         config.pop(key)
     config["effective_readout"] = effective_readout(args, variant)
     code = {str(p.relative_to(REPO)): sha256(p) for p in (
-        Path(__file__), REPO / "train_v3.py", REPO / "model/QuangV3.py", REPO / "building_graph.py", REPO / "dep_vocab.py",
+        Path(__file__), REPO / "train_v3.py", REPO / "model/QuangV3.py", REPO / "model/EvidenceErasure.py",
+        REPO / "building_graph.py", REPO / "dep_vocab.py",
         REPO / "dep_vocab.json",
     )}
     record = dict(config=config, variant=variant, seed=seed, data=data_hashes,
@@ -76,6 +77,7 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
         model.train()
         permutation = torch.randperm(train.G, generator=sampler_generator)
         epoch_loss = 0.0
+        evidence_stats = {}
         for offset in range(0, train.G, args.batch_size):
             indices = permutation[offset:offset + args.batch_size]
             optimizer.zero_grad(set_to_none=True)
@@ -86,15 +88,17 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
                 # Release clean activations BEFORE the augmented forward. The
                 # effective step still averages all examples/branches exactly.
                 with torch.autocast(device.type, dtype=torch.float16, enabled=amp):
-                    clean = model(batch)
-                    clean_loss = F.binary_cross_entropy_with_logits(clean.float(), batch["y"])
+                    clean, clean_loss, stats = training_forward(model, batch, args)
+                for key, value in stats.items():
+                    evidence_stats[key] = evidence_stats.get(key, 0.0) + float(value) * batch["B"] * branch_weight
                 scaler.scale(weight * branch_weight * clean_loss).backward()
                 epoch_loss += branch_weight * float(clean_loss.detach()) * batch["B"]
                 del clean, clean_loss
                 if args.aug != "none":
                     with torch.autocast(device.type, dtype=torch.float16, enabled=amp):
-                        noisy = model(batch, aug_mode=args.aug)
-                        noisy_loss = F.binary_cross_entropy_with_logits(noisy.float(), batch["y"])
+                        noisy, noisy_loss, stats = training_forward(model, batch, args, aug_mode=args.aug)
+                    for key, value in stats.items():
+                        evidence_stats[key] = evidence_stats.get(key, 0.0) + float(value) * batch["B"] * 0.5
                     scaler.scale(weight * 0.5 * noisy_loss).backward()
                     epoch_loss += 0.5 * float(noisy_loss.detach()) * batch["B"]
                     del noisy, noisy_loss
@@ -147,6 +151,7 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
             raw_val_loss=raw_clean, raw_val_swap_loss=raw_swap,
             raw_selection_score=raw_score, raw_metrics=raw_metrics,
             ema_improved=ema_improved, raw_improved=raw_improved,
+            evidence={k: v / train.G for k, v in evidence_stats.items()},
         ))
 
         # Clone both states before saving.  The counterpart state is retained
@@ -181,6 +186,9 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
         print(f"Epoch {epoch:02d} | loss {epoch_loss/train.G:.4f} | "
               f"EMA val {ema_clean:.4f} ({'best' if ema_improved else 'keep'}) | "
               f"Raw val {raw_clean:.4f} ({'best' if raw_improved else 'keep'})", flush=True)
+        if evidence_stats:
+            print("Evidence: " + ", ".join(f"{k}={v/train.G:.4f}" for k, v in evidence_stats.items()),
+                  flush=True)
         if bad >= args.patience:
             break
 

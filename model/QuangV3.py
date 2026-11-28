@@ -277,7 +277,7 @@ class Net(nn.Module):
             x_new = torch.where(use_mask.unsqueeze(1), self.mask_emb.to(x.dtype).unsqueeze(0).expand_as(x), x_new)
         return x_new
 
-    def forward(self, b, aug_mode=None, gen=None):
+    def encode_nodes(self, b, aug_mode=None, gen=None):
         x, src, dst, rel, bidx, B = b["x"], b["src"], b["dst"], b["rel"], b["bidx"], b["B"]
         N = x.size(0)
         if aug_mode and aug_mode != "none":
@@ -296,7 +296,11 @@ class Net(nn.Module):
         h = F.gelu(h)
         for lyr, ln in zip(self.layers, self.norms):
             h = h + self.drop(F.gelu(ln(lyr(h, src, dst, rel, norm))))
-        h = h.float()
+        return h.float()
+
+    def forward(self, b, aug_mode=None, gen=None):
+        h = self.encode_nodes(b, aug_mode=aug_mode, gen=gen)
+        bidx, B, N = b["bidx"], b["B"], h.size(0)
         cn = torch.zeros(B, device=h.device).index_add_(0, bidx, torch.ones(N, device=h.device)).clamp(min=1.0)
         mean = torch.zeros(B, h.size(1), device=h.device).index_add_(0, bidx, h) / cn.unsqueeze(1)
         mx = torch.full((B, h.size(1)), -1e30, device=h.device).scatter_reduce(

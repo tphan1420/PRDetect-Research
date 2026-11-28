@@ -17,6 +17,25 @@ from evaluate_v3_quang import (REPO, TRAINING_DOMAINS, environment, human95_thre
                                positive_int, sha256, write_json)
 
 
+def add_erasure_arguments(parser):
+    parser.add_argument("--erasure-mode", choices=("none", "random", "worst"), default="none")
+    parser.add_argument("--erasure-fraction", type=float, default=0.2,
+                        help="Maximum fraction of nodes removed from the evidence readout")
+    parser.add_argument("--erasure-weight", type=float, default=0.5,
+                        help="Weight of auxiliary BCE after erasure")
+    parser.add_argument("--erasure-candidates", type=positive_int, default=32,
+                        help="Maximum number of graph-local candidate regions per document")
+
+
+def validate_erasure_args(args, readout):
+    if not 0 <= args.erasure_fraction < 1:
+        raise ValueError("erasure-fraction must be in [0,1)")
+    if not math.isfinite(args.erasure_weight) or args.erasure_weight < 0:
+        raise ValueError("erasure-weight must be finite and nonnegative")
+    if args.erasure_mode != "none" and readout != "evidence":
+        raise ValueError("Erasure requires the evidence readout")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variants", nargs="+", choices=("baseline",), default=["baseline"],
@@ -36,7 +55,8 @@ def build_parser():
     parser.add_argument("--edge-drop", type=float, default=0.1)
     parser.add_argument("--struct", type=int, choices=(0, 1), default=1)
     parser.add_argument("--gfeat", type=int, choices=(0, 1), default=0)
-    parser.add_argument("--readout", choices=("pool3",), default="pool3")
+    parser.add_argument("--readout", choices=("pool3", "evidence"), default="pool3")
+    add_erasure_arguments(parser)
     parser.add_argument("--aug", choices=("none", "swap", "mask", "both"), default="swap")
     parser.add_argument("--aug-max", type=float, default=0.35)
     parser.add_argument("--ema", type=int, choices=(0, 1), default=1)
@@ -89,6 +109,9 @@ def configure_determinism(enabled=True):
 
 
 def validate_args(args):
+    validate_erasure_args(args, args.readout)
+    if args.readout == "evidence" and args.gfeat:
+        raise ValueError("Evidence readout requires --gfeat 0")
     pairs = {(item["train_file"], item["val_file"]) for item in TRAINING_DOMAINS.values()}
     if (args.train_file, args.val_file) not in pairs:
         raise ValueError("Use a supported train/validation pair from TRAINING_DOMAINS")
@@ -112,6 +135,8 @@ def effective_readout(args, variant):
 
 def build_model(args, variant, R):
     from model.QuangV3 import Net
+    if args.readout == "evidence":
+        from model.EvidenceErasure import EvidenceNet as Net
 
     kwargs = dict(d=args.hidden, nb=args.num_bases, L=args.layers, p=args.dropout,
                   p_in=args.in_dropout, edge_drop=args.edge_drop,
@@ -119,6 +144,16 @@ def build_model(args, variant, R):
                   readout=effective_readout(args, variant), aug=args.aug,
                   aug_max=args.aug_max, mode=args.struct_mode)
     return Net(R, **kwargs)
+
+
+def training_forward(model, batch, args, aug_mode=None):
+    if args.readout == "evidence":
+        return model.training_objective(
+            batch, mode=args.erasure_mode, fraction=args.erasure_fraction,
+            weight=args.erasure_weight, candidates=args.erasure_candidates, aug_mode=aug_mode)
+    import torch.nn.functional as F
+    logits = model(batch, aug_mode=aug_mode)
+    return logits, F.binary_cross_entropy_with_logits(logits.float(), batch["y"]), {}
 
 
 def load_graph(path, source, R, mode):
@@ -188,7 +223,8 @@ def signature(args, variant, seed, data_hashes):
         config.pop(key)
     config["effective_readout"] = effective_readout(args, variant)
     code = {str(p.relative_to(REPO)): sha256(p) for p in (
-        Path(__file__), REPO / "model/QuangV3.py", REPO / "building_graph.py", REPO / "dep_vocab.py",
+        Path(__file__), REPO / "model/QuangV3.py", REPO / "model/EvidenceErasure.py",
+        REPO / "building_graph.py", REPO / "dep_vocab.py",
         REPO / "dep_vocab.json",
     )}
     record = dict(config=config, variant=variant, seed=seed, data=data_hashes,
@@ -242,6 +278,7 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
         model.train()
         permutation = torch.randperm(train.G, generator=sampler_generator)
         epoch_loss = 0.0
+        evidence_stats = {}
         for offset in range(0, train.G, args.batch_size):
             indices = permutation[offset:offset + args.batch_size]
             optimizer.zero_grad(set_to_none=True)
@@ -252,15 +289,17 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
                 # Release clean activations BEFORE the augmented forward. The
                 # effective step still averages all examples/branches exactly.
                 with torch.autocast(device.type, dtype=torch.float16, enabled=amp):
-                    clean = model(batch)
-                    clean_loss = F.binary_cross_entropy_with_logits(clean.float(), batch["y"])
+                    clean, clean_loss, stats = training_forward(model, batch, args)
+                for key, value in stats.items():
+                    evidence_stats[key] = evidence_stats.get(key, 0.0) + float(value) * batch["B"] * branch_weight
                 scaler.scale(weight * branch_weight * clean_loss).backward()
                 epoch_loss += branch_weight * float(clean_loss.detach()) * batch["B"]
                 del clean, clean_loss
                 if args.aug != "none":
                     with torch.autocast(device.type, dtype=torch.float16, enabled=amp):
-                        noisy = model(batch, aug_mode=args.aug)
-                        noisy_loss = F.binary_cross_entropy_with_logits(noisy.float(), batch["y"])
+                        noisy, noisy_loss, stats = training_forward(model, batch, args, aug_mode=args.aug)
+                    for key, value in stats.items():
+                        evidence_stats[key] = evidence_stats.get(key, 0.0) + float(value) * batch["B"] * 0.5
                     scaler.scale(weight * 0.5 * noisy_loss).backward()
                     epoch_loss += 0.5 * float(noisy_loss.detach()) * batch["B"]
                     del noisy, noisy_loss
@@ -289,7 +328,8 @@ def train_one(args, variant, seed, train, val, run_signature, provenance):
         if not math.isfinite(epoch_loss) or not math.isfinite(score):
             raise FloatingPointError("Non-finite loss; no completed checkpoint will be marked")
         history.append(dict(epoch=epoch, train_loss=epoch_loss / train.G, val_loss=clean_loss,
-                            val_swap_loss=swap_loss, selection_score=score, **metrics))
+                            val_swap_loss=swap_loss, selection_score=score, **metrics,
+                            evidence={k: v / train.G for k, v in evidence_stats.items()}))
         improved = score < best_score - 1e-6
         if improved:
             raw_state = {

@@ -21,7 +21,7 @@ from transformers import AutoConfig
 
 from evaluate_v3_quang import REPO, TRAINING_DOMAINS, sha256, write_json
 from model.RGCN import RGCN2
-from train_v3 import atomic_save
+from train_v3 import add_erasure_arguments, atomic_save, validate_erasure_args
 from v3_a1_fusion import AlignedScorer, labels_from, read_source, source_digest
 
 
@@ -115,6 +115,8 @@ def main():
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--feature-cache", type=Path, required=True)
     parser.add_argument("--v3-epochs", type=int, default=10)
+    parser.add_argument("--v3-readout", choices=("pool3", "evidence"), default="pool3")
+    add_erasure_arguments(parser)
     parser.add_argument("--v3-struct", type=int, choices=(0, 1), default=0,
                         help="Enable V3 node structural features (default: off).")
     parser.add_argument("--v3-aug", choices=("swap", "none"), default="none",
@@ -129,6 +131,10 @@ def main():
                         help="Reuse the reference V4 A1 checkpoint for this seed instead of training A1.")
     parser.add_argument("--serial", action="store_true", help="Use one GPU even when two are available")
     args = parser.parse_args()
+    try:
+        validate_erasure_args(args, args.v3_readout)
+    except ValueError as error:
+        parser.error(str(error))
     if not torch.cuda.is_available():
         parser.error("Training requires a CUDA GPU")
     if min(args.v3_epochs, args.a1_epochs, args.batch_size, args.micro_batch_size,
@@ -162,6 +168,10 @@ def main():
                "--struct", str(args.v3_struct), "--aug", args.v3_aug,
                "--batch-size", str(args.batch_size), "--micro-batch-size", str(args.micro_batch_size),
                "--val-batch-size", str(args.val_batch_size), "--graph-dir", str(graphs), "--output-dir", str(out)]
+        cmd.extend(["--readout", args.v3_readout, "--erasure-mode", args.erasure_mode,
+                    "--erasure-fraction", str(args.erasure_fraction),
+                    "--erasure-weight", str(args.erasure_weight),
+                    "--erasure-candidates", str(args.erasure_candidates)])
         if args.a1_checkpoint is not None:
             shutil.copyfile(args.a1_checkpoint, out / args.a1_checkpoint.name)
             subprocess.run(cmd, cwd=REPO, check=True)
@@ -185,14 +195,23 @@ def main():
         config = record["provenance"]["config"]
         if (config["struct"], config["aug"], config["ema"]) != (args.v3_struct, args.v3_aug, 1):
             raise ValueError("Unexpected structural features, augmentation or EMA configuration")
+        if config["readout"] != args.v3_readout:
+            raise ValueError("Unexpected readout configuration")
+        for key in ("erasure_mode", "erasure_fraction", "erasure_weight", "erasure_candidates"):
+            if config[key] != getattr(args, key):
+                raise ValueError(f"Unexpected {key} configuration")
         manifest = out / "manifest.json"
         write_json(manifest, [dict(seed=args.seed, file=p.name, sha256=sha256(p)) for p in paths])
         model_name = {(1, "swap"): "v4", (0, "swap"): "v4_abla2",
                       (1, "none"): "v4_abla3", (0, "none"): "v4_abla1"}[args.v3_struct, args.v3_aug]
+        if args.v3_readout == "evidence":
+            model_name = f"v4_evidence_{args.erasure_mode}"
         write_json(out / "v4_train.json", dict(model=model_name, threshold=0.5, encoder_revision=revision,
                    args={k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}))
         with ZipFile(out / f"{model_name}_hc3_seed{args.seed}.zip", "w", ZIP_DEFLATED) as z:
-            for p in [*paths, manifest]:
+            for p in [*paths, manifest, out / "v4_train.json",
+                      out / f"v3_baseline_dual_seed{args.seed}.train.json",
+                      out / f"v3_baseline_raw_seed{args.seed}.pt"]:
                 z.write(p, p.name)
         out.rename(dest)
     print(f"V4 checkpoints and training records: {dest}", flush=True)

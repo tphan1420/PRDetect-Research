@@ -229,6 +229,18 @@ For ablations, the dual trainer also saves the RAW checkpoint. Use
 historical A1, fusion, routed and human95 experiments. The previous Kaggle
 experiments remain under `notebooks/kaggle/v3_base/`.
 
+The experimental [07 evidence erasure notebook](notebooks/kaggle/v4/07_train_v4_evidence_erasure_hc3.ipynb)
+trains a signed node evidence readout with one R-GCN encoding per training view.
+It reuses a supplied same-seed A1 checkpoint and evaluates EMA and EMA × A1 on the
+three reference splits. Use `--v3-readout evidence --erasure-mode worst` with
+`train_v4.py`. Modes `none` and `random` provide head-only and random-region
+ablations. Defaults are a 0.2 node budget, 0.5 auxiliary loss weight, and 32
+candidate centers. Each region is the largest complete undirected neighborhood
+of radius at most the R-GCN depth that fits the budget. Training selects the
+highest-BCE candidate for each document and records actual erased fractions.
+Erasure operates on the readout after encoding; robustness to edited text is an
+experimental hypothesis. Choose settings on HC3 validation before test evaluation.
+
 ## V3 Core baseline
 
 The standalone V3 Core is Quang's basis-decomposed RGCN baseline with the
