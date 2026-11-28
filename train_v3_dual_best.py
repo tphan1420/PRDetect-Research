@@ -18,8 +18,7 @@ def signature(args, variant, seed, data_hashes):
         config.pop(key)
     config["effective_readout"] = effective_readout(args, variant)
     code = {str(p.relative_to(REPO)): sha256(p) for p in (
-        Path(__file__), REPO / "train_v3.py", REPO / "model/QuangV3.py", REPO / "model/RelationResponse.py",
-        REPO / "building_graph.py", REPO / "dep_vocab.py",
+        Path(__file__), REPO / "train_v3.py", REPO / "model/QuangV3.py", REPO / "building_graph.py", REPO / "dep_vocab.py",
         REPO / "dep_vocab.json",
     )}
     record = dict(config=config, variant=variant, seed=seed, data=data_hashes,

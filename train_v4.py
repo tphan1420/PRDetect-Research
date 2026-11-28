@@ -119,8 +119,6 @@ def main():
                         help="Enable V3 node structural features (default: off).")
     parser.add_argument("--v3-aug", choices=("swap", "none"), default="none",
                         help="V3 training augmentation (default: none). Checkpoint selection uses the same validation proxy.")
-    parser.add_argument("--relation-response", action="store_true",
-                        help="Use a shared R-GCN for original and relation-permuted graphs")
     parser.add_argument("--a1-epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--micro-batch-size", type=int, default=1)
@@ -131,8 +129,6 @@ def main():
                         help="Reuse the reference V4 A1 checkpoint for this seed instead of training A1.")
     parser.add_argument("--serial", action="store_true", help="Use one GPU even when two are available")
     args = parser.parse_args()
-    if args.relation_response and (args.v3_struct or args.v3_aug != "none"):
-        parser.error("Relation response requires --v3-struct 0 --v3-aug none")
     if not torch.cuda.is_available():
         parser.error("Training requires a CUDA GPU")
     if min(args.v3_epochs, args.a1_epochs, args.batch_size, args.micro_batch_size,
@@ -166,8 +162,6 @@ def main():
                "--struct", str(args.v3_struct), "--aug", args.v3_aug,
                "--batch-size", str(args.batch_size), "--micro-batch-size", str(args.micro_batch_size),
                "--val-batch-size", str(args.val_batch_size), "--graph-dir", str(graphs), "--output-dir", str(out)]
-        if args.relation_response:
-            cmd.append("--relation-response")
         if args.a1_checkpoint is not None:
             shutil.copyfile(args.a1_checkpoint, out / args.a1_checkpoint.name)
             subprocess.run(cmd, cwd=REPO, check=True)
@@ -191,14 +185,10 @@ def main():
         config = record["provenance"]["config"]
         if (config["struct"], config["aug"], config["ema"]) != (args.v3_struct, args.v3_aug, 1):
             raise ValueError("Unexpected structural features, augmentation or EMA configuration")
-        if bool(config.get("relation_response", False)) != args.relation_response:
-            raise ValueError("Unexpected relation response configuration")
         manifest = out / "manifest.json"
         write_json(manifest, [dict(seed=args.seed, file=p.name, sha256=sha256(p)) for p in paths])
         model_name = {(1, "swap"): "v4", (0, "swap"): "v4_abla2",
                       (1, "none"): "v4_abla3", (0, "none"): "v4_abla1"}[args.v3_struct, args.v3_aug]
-        if args.relation_response:
-            model_name = "v4_relation_response"
         write_json(out / "v4_train.json", dict(model=model_name, threshold=0.5, encoder_revision=revision,
                    args={k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}))
         with ZipFile(out / f"{model_name}_hc3_seed{args.seed}.zip", "w", ZIP_DEFLATED) as z:

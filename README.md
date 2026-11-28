@@ -229,15 +229,6 @@ For ablations, the dual trainer also saves the RAW checkpoint. Use
 historical A1, fusion, routed and human95 experiments. The previous Kaggle
 experiments remain under `notebooks/kaggle/v3_base/`.
 
-The experimental [07 relation response notebook](notebooks/kaggle/v4/07_train_v4_relation_response_hc3.ipynb)
-uses `--relation-response --v3-struct 0 --v3-aug none` and a supplied same-seed
-`--a1-checkpoint`. A shared R-GCN encodes the original graph and one permutation
-of its non-self-loop relation labels. Its head receives the original pooled
-features and their difference from the control graph. Training shares dropout
-masks between the two views. Evaluation fixes the permutation per graph.
-The notebook exports separate EMA and EMA × A1 scores, training provenance and
-the code commit for the three reference splits.
-
 ## V3 Core baseline
 
 The standalone V3 Core is Quang's basis-decomposed RGCN baseline with the

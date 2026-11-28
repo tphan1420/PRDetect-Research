@@ -277,7 +277,7 @@ class Net(nn.Module):
             x_new = torch.where(use_mask.unsqueeze(1), self.mask_emb.to(x.dtype).unsqueeze(0).expand_as(x), x_new)
         return x_new
 
-    def encode(self, b, aug_mode=None, gen=None):
+    def forward(self, b, aug_mode=None, gen=None):
         x, src, dst, rel, bidx, B = b["x"], b["src"], b["dst"], b["rel"], b["bidx"], b["B"]
         N = x.size(0)
         if aug_mode and aug_mode != "none":
@@ -304,10 +304,7 @@ class Net(nn.Module):
         w = seg_softmax(self.gate(h).squeeze(-1), bidx, B)
         att = torch.zeros(B, h.size(1), device=h.device).index_add_(0, bidx, h * w.unsqueeze(1))
         z = [mean, mx, att] + ([b["gf"]] if self.use_gfeat else [])
-        return torch.cat(z, 1)
-
-    def forward(self, b, aug_mode=None, gen=None):
-        return self.mlp(self.encode(b, aug_mode=aug_mode, gen=gen)).squeeze(-1)
+        return self.mlp(torch.cat(z, 1)).squeeze(-1)
 
 
 def set_seed(s):
